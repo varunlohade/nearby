@@ -1,0 +1,261 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>C</title>
+<link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="https://unpkg.com/d3-delaunay@6.0.4/dist/d3-delaunay.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&display=block" rel="stylesheet">
+<script src="common.js"></script>
+<style>
+:root{--bg:#000;--card:#121214;--card2:#1B1B1E;--line:#2A2A2E;--t1:#F5F5F7;--t2:#A0A0A8;--t3:#6B6B73;--amb:#FFB020}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:#000;color:var(--t1);font-family:"Instrument Sans",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+.n{font-variant-numeric:tabular-nums}
+#app{position:relative;width:100%;height:100%;overflow:hidden}
+#map{position:absolute;inset:0}
+.sb{position:absolute;top:0;left:0;right:0;height:50px;display:flex;align-items:center;justify-content:space-between;padding:4px 30px 0 34px;z-index:20;font-weight:600;font-size:16px}
+.sb-right{display:flex;gap:6px;align-items:center}
+.cl{display:flex;flex-direction:column;align-items:center;pointer-events:none;text-shadow:0 1px 6px #000}
+.cl b{font-size:22px;font-weight:600;color:var(--amb);line-height:1;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.cl span{font-size:11.5px;color:#C9C9CF;margin-top:3px;white-space:nowrap;font-weight:500}
+.cl.mine{background:#fff;color:#000;border-radius:14px;padding:6px 11px 7px;text-shadow:none;box-shadow:0 6px 18px rgba(0,0,0,.6)}
+.cl.mine b{color:#000;font-size:14px;letter-spacing:-.01em}
+.cl.mine span{color:#55555C;margin-top:2px}
+.open{font-size:11.5px;color:var(--t3);display:flex;align-items:center;gap:4px;font-weight:500}
+.tm{background:var(--amb);color:#000;font-size:11px;font-weight:700;border-radius:7px;padding:2px 6px 3px;position:relative;font-variant-numeric:tabular-nums;white-space:nowrap}
+.tm:after{content:"";position:absolute;left:50%;bottom:-4px;width:7px;height:7px;background:var(--amb);transform:translateX(-50%) rotate(45deg);border-radius:1px;z-index:-1}
+.legend{position:absolute;top:58px;left:14px;z-index:10;display:flex;align-items:center;gap:8px;font-size:12px;color:var(--t2);background:rgba(18,18,20,.82);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border:1px solid var(--line);border-radius:12px;padding:7px 10px}
+.legend .sq{display:flex;gap:3px}.legend .sq i{width:12px;height:12px;border-radius:3px;background:var(--amb)}
+/* callout */
+.pop{width:286px;background:var(--card);border:1px solid var(--line);border-radius:22px;padding:14px 14px 12px;position:relative;
+  box-shadow:0 18px 40px rgba(0,0,0,.7),0 2px 6px rgba(0,0,0,.6)}
+.pop:after{content:"";position:absolute;left:var(--tail,50%);top:-8px;width:15px;height:15px;background:var(--card);border-left:1px solid var(--line);border-top:1px solid var(--line);transform:translateX(-50%) rotate(45deg);border-radius:3px 0 0 0}
+.pop .hd{display:flex;justify-content:space-between;align-items:baseline}
+.pop h2{font-size:21px;font-weight:600;letter-spacing:-.02em}
+.pop .busy{font-size:13px;color:var(--amb);font-weight:600;font-variant-numeric:tabular-nums}
+.pop .mem{font-size:12.5px;color:var(--t3);margin-top:1px}
+.post{display:flex;gap:10px;margin-top:12px}
+.av{width:30px;height:30px;border-radius:50%;flex:none;display:grid;place-items:center;font-size:12px;font-weight:700;color:#000}
+.post .w{font-size:12.5px;color:var(--t2);font-weight:600}.post .w span{color:var(--t3);font-weight:400;margin-left:5px}
+.post p{font-size:14.5px;line-height:1.35;margin-top:1px;color:var(--t1)}
+.nx{margin-top:10px;display:flex;gap:10px;align-items:center;border-top:1px solid var(--line);padding-top:10px}
+.nx .d{width:44px;flex:none;text-align:center}
+.nx .d small{display:block;font-size:11px;color:var(--amb);font-weight:600}
+.nx .d b{display:block;font-size:19px;font-weight:600;line-height:1.05;font-variant-numeric:tabular-nums}
+.nx .tt b{display:block;font-size:14px;font-weight:600}
+.nx .tt span{display:block;font-size:12.5px;color:var(--t2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px}
+.go{margin-top:12px;height:46px;border-radius:14px;background:var(--amb);color:#000;display:grid;place-items:center;font-weight:700;font-size:15.5px}
+.dock{position:absolute;left:12px;right:12px;bottom:26px;z-index:10}
+.priv{font-size:12.5px;color:var(--t2);display:flex;align-items:center;justify-content:center;gap:6px;margin-bottom:10px}
+.priv b{color:var(--t1);font-weight:600}
+.search{height:54px;border-radius:27px;background:rgba(28,28,31,.78);backdrop-filter:blur(18px) saturate(1.4);-webkit-backdrop-filter:blur(18px) saturate(1.4);
+  border:1px solid rgba(255,255,255,.09);display:flex;align-items:center;gap:10px;padding:0 7px 0 18px;font-size:16px;color:var(--t2);box-shadow:0 10px 30px rgba(0,0,0,.6)}
+.search .g{flex:1}
+.me{width:40px;height:40px;border-radius:50%;background:#fff;color:#000;display:grid;place-items:center;font-weight:700;font-size:15px}
+/* side panel */
+.panel{position:absolute;top:0;right:0;bottom:0;width:306px;background:#0C0C0E;border-left:1px solid var(--line);z-index:15;padding:58px 20px 26px;display:flex;flex-direction:column;
+  box-shadow:-20px 0 40px rgba(0,0,0,.6)}
+.panel .top{display:flex;justify-content:space-between;align-items:center}
+.x{width:34px;height:34px;border-radius:50%;background:var(--card2);display:grid;place-items:center;flex:none}
+.panel h1{font-size:30px;font-weight:600;letter-spacing:-.03em;line-height:1.05;margin-top:18px}
+.panel .lede{font-size:14.5px;color:var(--t2);margin-top:8px;line-height:1.4}
+.shape{margin-top:18px;height:132px;border-radius:18px;background:var(--card);border:1px solid var(--line);display:grid;place-items:center;position:relative}
+.shape small{position:absolute;left:12px;top:10px;font-size:12px;color:var(--t3)}
+.lbl{font-size:12.5px;color:var(--t2);margin:18px 0 6px;font-weight:500}
+.in{height:52px;border-radius:14px;background:var(--card);border:1.5px solid var(--amb);display:flex;align-items:center;padding:0 14px;font-size:17px;font-weight:500}
+.caret{width:2px;height:22px;background:var(--amb);margin-left:1px}
+.facts{margin-top:16px;display:flex;flex-direction:column;gap:12px}
+.fact{display:flex;gap:10px;font-size:13.5px;color:var(--t2);line-height:1.35}
+.fact svg{flex:none;margin-top:1px}
+.fact b{color:var(--t1);font-weight:600}
+.panel .go{margin-top:auto;height:52px;font-size:16px}
+/* chat */
+.chat{position:absolute;inset:0;background:#000;display:flex;flex-direction:column}
+.ch-head{padding:54px 14px 12px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--line)}
+.back{width:36px;height:40px;display:grid;place-items:center}
+.ch-t{flex:1}.ch-t b{display:block;font-size:17px;font-weight:600}.ch-t span{display:block;font-size:13px;color:var(--t2);font-variant-numeric:tabular-nums}
+.msgs{flex:1;padding:12px 12px 100px;display:flex;flex-direction:column;justify-content:flex-end;gap:3px;overflow:hidden}
+.msgs>*{flex-shrink:0}
+.who{font-size:12.5px;color:var(--t2);margin:10px 0 3px 44px;font-weight:500}
+.row{display:flex;gap:8px;align-items:flex-end;width:fit-content;max-width:84%}
+.row .av{width:30px;height:30px}
+.bub{background:#1C1C1F;border-radius:20px;padding:9px 14px 10px;font-size:16px;line-height:1.32}
+.row.mine{align-self:flex-end;max-width:300px;margin-top:10px}
+.row.mine .bub{background:var(--amb);color:#000}
+.evc{margin:4px 0 4px 38px;width:292px;background:var(--card);border:1px solid var(--line);border-radius:22px;padding:14px}
+.evc .k{font-size:12.5px;color:var(--amb);font-weight:600}
+.evc .when{display:flex;align-items:baseline;gap:8px;margin-top:6px}
+.evc .when b{font-size:34px;font-weight:600;letter-spacing:-.03em;font-variant-numeric:tabular-nums;line-height:1}
+.evc .when span{font-size:15px;color:var(--t2)}
+.evc h3{font-size:18px;font-weight:600;margin-top:8px;letter-spacing:-.01em}
+.evc .pl{font-size:14px;color:var(--t2);margin-top:2px}
+.evc .ft{display:flex;justify-content:space-between;align-items:center;margin-top:14px}
+.evc .ft span{font-size:13.5px;color:var(--t2)}
+.evc .pill{height:38px;padding:0 16px;border-radius:12px;background:var(--amb);color:#000;font-weight:700;font-size:14.5px;display:grid;place-items:center}
+.sys{align-self:center;font-size:12.5px;color:var(--t3);margin-top:12px}
+.composer{position:absolute;left:10px;right:10px;bottom:26px;height:54px;border-radius:27px;background:rgba(28,28,31,.85);border:1px solid rgba(255,255,255,.08);display:flex;align-items:center;gap:8px;padding:0 7px;backdrop-filter:blur(18px)}
+.composer .add{width:40px;height:40px;border-radius:50%;background:#2A2A2E;display:grid;place-items:center}
+.composer .ph{flex:1;font-size:16px;color:var(--t3)}
+.composer .send{width:40px;height:40px;border-radius:50%;background:var(--amb);display:grid;place-items:center}
+/* desktop */
+.lp{position:absolute;left:0;top:0;bottom:0;width:380px;background:#0A0A0C;border-right:1px solid var(--line);z-index:12;padding:28px 22px;display:flex;flex-direction:column}
+.lp h3{font-size:30px;font-weight:600;letter-spacing:-.03em}
+.lp p.s{font-size:14px;color:var(--t2);margin-top:4px}
+.rank{margin-top:18px;display:flex;flex-direction:column}
+.rk{display:flex;gap:14px;align-items:flex-start;padding:12px 4px;border-top:1px solid #1A1A1D}
+.rk>b{width:42px;font-size:26px;font-weight:600;color:var(--amb);font-variant-numeric:tabular-nums;letter-spacing:-.02em;line-height:1;text-align:right;flex:none}
+.rk .t b{font-size:15px;font-weight:600;display:block}
+.rk .t span{font-size:13px;color:var(--t2);display:block;margin-top:2px;line-height:1.35}
+.rk.mine .t b:after{content:"Your area";font-size:11px;font-weight:600;background:#fff;color:#000;border-radius:6px;padding:1px 6px;margin-left:8px;vertical-align:2px}
+.desk .dock{left:400px;right:auto;width:420px;bottom:24px}
+.desk .legend{left:400px;top:24px}
+</style></head>
+<body><div id="app"></div>
+<script>
+const P = { land:'#000000', water:'#0B1118', park:'#0A100B', building:'#121214', road:'#1F1F23', casing:'#1F1F23', rail:'#1A1A1D', roadLabels:'#4A4A52' };
+const AV = { 'Inês':'#FF9E7A','Tomás':'#7ADBC2','Carla':'#B9A4FF','Rui':'#FFD27A','Ana':'#8EC9FF','Marta':'#FF9ECF','João':'#A6E07A' };
+const I = {
+  search:'<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#A0A0A8" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>',
+  lock:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="10.5" width="15" height="10" rx="2.5"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/></svg>',
+  plus:'<svg width="11" height="11" viewBox="0 0 12 12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 1.5v9M1.5 6h9"/></svg>',
+  x:'<svg width="12" height="12" viewBox="0 0 12 12" stroke="#F5F5F7" stroke-width="2" stroke-linecap="round"><path d="m2 2 8 8M10 2l-8 8"/></svg>',
+  back:'<svg width="12" height="20" viewBox="0 0 12 20" fill="none" stroke="#F5F5F7" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2 2 10l8 8"/></svg>',
+  send:'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20V5M5.5 11.5 12 5l6.5 6.5"/></svg>',
+  crown:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#FFB020" stroke-width="2.2" stroke-linejoin="round"><path d="M3.5 8l4.5 4 4-7 4 7 4.5-4-2 11h-13z"/></svg>',
+};
+const app = document.getElementById('app');
+const s = C.screen, desk = C.desk;
+if (desk) app.classList.add('desk');
+
+const extra = [
+  { id: 'arroios', name: 'Arroios', c: [-9.1385, 38.7335], empty: true },
+  { id: 'avenida', name: 'Avenida', c: [-9.1462, 38.7222], empty: true },
+  { id: 'apolonia', name: 'Santa Apolónia', c: [-9.1205, 38.7115], empty: true },
+  { id: 'cais', name: 'Cais do Sodré', c: [-9.1462, 38.7072], empty: true },
+  { id: 'estrela', name: 'Estrela', c: [-9.1560, 38.7130], empty: true },
+  { id: 'graca_n', name: 'Sapadores', c: [-9.1250, 38.7215], empty: true },
+];
+const ALL = [...C.areas, ...extra];
+
+function cells() {
+  const pts = ALL.map(a => C.toM(a.c, C.ORIGIN));
+  const dl = d3.Delaunay.from(pts);
+  const vor = dl.voronoi([-2200, -1400, 2200, 2200]);
+  const out = {};
+  ALL.forEach((a, i) => { out[a.id] = vor.cellPolygon(i); });
+  return out;
+}
+const CELLS = cells();
+const ringLL = id => CELLS[id].map(p => C.toLL(p, C.ORIGIN));
+
+function cellSVG(id, size, stroke, dash, fill) {
+  const pts = CELLS[id]; const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+  const minx = Math.min(...xs), maxx = Math.max(...xs), miny = Math.min(...ys), maxy = Math.max(...ys);
+  const k = (size - 12) / Math.max(maxx - minx, maxy - miny);
+  const ox = (size - (maxx - minx) * k) / 2, oy = (size - (maxy - miny) * k) / 2;
+  const d = pts.map((p, i) => (i ? 'L' : 'M') + (ox + (p[0] - minx) * k).toFixed(1) + ' ' + (oy + (maxy - p[1]) * k).toFixed(1)).join(' ') + 'Z';
+  return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}"><path d="${d}" fill="${fill || 'none'}" stroke="${stroke}" stroke-width="1.6" ${dash ? 'stroke-dasharray="4 4"' : ''} stroke-linejoin="round"/></svg>`;
+}
+
+function cellLayers(map, opt) {
+  const feats = ALL.map(a => C.poly(ringLL(a.id), { id: a.id, empty: a.empty ? 1 : 0, mine: a.mine ? 1 : 0,
+    heat: a.empty ? 0 : 0.10 + 0.5 * Math.min(1, a.now / 40), sel: a.id === opt.sel ? 1 : 0, build: a.id === opt.build ? 1 : 0 }));
+  map.addSource('cells', { type: 'geojson', data: C.fc(feats) });
+  map.addLayer({ id: 'c-fill', type: 'fill', source: 'cells', filter: ['==', ['get', 'empty'], 0], paint: { 'fill-color': '#FFB020', 'fill-opacity': ['get', 'heat'] } });
+  map.addLayer({ id: 'c-line', type: 'line', source: 'cells', paint: { 'line-color': '#3A3A40', 'line-width': 1 } });
+  map.addLayer({ id: 'c-sel', type: 'line', source: 'cells', filter: ['==', ['get', 'sel'], 1], layout: { 'line-join': 'round' }, paint: { 'line-color': '#FFB020', 'line-width': 2.4 } });
+  map.addLayer({ id: 'c-mine', type: 'line', source: 'cells', filter: ['==', ['get', 'mine'], 1], layout: { 'line-join': 'round' }, paint: { 'line-color': '#FFFFFF', 'line-width': 2.6 } });
+  map.addLayer({ id: 'c-build-f', type: 'fill', source: 'cells', filter: ['==', ['get', 'build'], 1], paint: { 'fill-color': '#FFFFFF', 'fill-opacity': 0.08 } });
+  map.addLayer({ id: 'c-build', type: 'line', source: 'cells', filter: ['==', ['get', 'build'], 1], layout: { 'line-join': 'round' }, paint: { 'line-color': '#FFFFFF', 'line-width': 2, 'line-dasharray': [2, 2] } });
+  // Re-draw the river on top so cells stop at the shore.
+  const w = map.getStyle().layers.find(l => l.id === 'water');
+  map.addLayer({ ...w, id: 'water-top', paint: { 'fill-color': '#0B1118' } });
+}
+
+function marks(map, opt) {
+  for (const a of ALL) {
+    if (a.empty) { if (!opt.noOpen && C.byId[a.id]) C.marker(map, a.c, `<div class="open">${I.plus}Open</div>`); continue; }
+    if (a.mine) C.marker(map, a.c, `<div class="cl mine"><b>You're in ${a.name}</b><span>${a.now} here now</span></div>`);
+    else C.marker(map, a.c, `<div class="cl"><b>${a.now}</b><span>${a.name}</span></div>`);
+  }
+  for (const e of C.events) C.marker(map, e.at, `<div class="tm">${e.day} ${e.short}</div>`, 'bottom');
+}
+
+function popHTML(a) {
+  const e = C.events.find(x => x.area === a.id);
+  return `<div class="pop"><div class="hd"><h2>${a.name}</h2><span class="busy">${a.now} here now</span></div><div class="mem">${a.members} neighbours</div>
+    <div class="post"><div class="av" style="background:${AV[a.post.who]}">${C.initials(a.post.who)}</div><div><div class="w">${a.post.who}<span>${a.post.ago} ago</span></div><p>${a.post.text}</p></div></div>
+    ${e ? `<div class="nx"><div class="d"><small>${e.day}</small><b>${e.date}</b></div><div class="tt"><b>${e.title}</b><span>${e.time}, ${e.going} going</span></div></div>` : ''}
+    <div class="go">Open the room</div></div>`;
+}
+
+function legend() { return `<div class="legend"><span>Quiet</span><div class="sq"><i style="opacity:.2"></i><i style="opacity:.4"></i><i style="opacity:.7"></i><i></i></div><span>Busy right now</span></div>`; }
+
+function buildPanel(a) {
+  return `<div class="panel"><div class="top"><span style="font-size:13px;color:var(--t3)">Empty area</span><div class="x">${I.x}</div></div>
+    <h1>Build your neighbourhood</h1><div class="lede">Nobody runs this cell yet. Name it and you're the founder.</div>
+    <div class="shape"><small>Your cell</small>${cellSVG(a.id, 112, '#FFB020', true, 'rgba(255,176,32,.10)')}</div>
+    <div class="lbl">Name</div><div class="in">${a.name}<span class="caret"></span></div>
+    <div class="facts"><div class="fact">${I.crown}<div><b>You're the founder.</b> You open the room and host first.</div></div>
+    <div class="fact"><span style="color:#FFB020;display:flex">${I.lock.replace(/14/g, '16')}</span><div><b>Only the area leaves your phone.</b> Others see "someone in ${a.name}".</div></div></div>
+    <div class="go">Build ${a.name}</div></div>`;
+}
+
+function mapScreen() {
+  app.innerHTML = (desk ? '' : C.statusBar(true)) + '<div id="map"></div>';
+  const me = C.areas.find(a => a.mine);
+  if (s === '1') {
+    app.insertAdjacentHTML('beforeend', legend() + `<div class="dock"><div class="priv">${I.lock}<span>You show up as <b>someone in ${me.name}</b></span></div>
+      <div class="search">${I.search}<span class="g">Search areas</span><div class="me">V</div></div></div>`);
+  } else app.insertAdjacentHTML('beforeend', buildPanel(C.byId.penha));
+  if (desk) {
+    const ranked = C.claimed().slice().sort((x, y) => y.now - x.now);
+    app.insertAdjacentHTML('beforeend', `<div class="lp"><h3>Lisbon right now</h3><p class="s">People talking in each neighbourhood.</p><div class="rank">
+      ${ranked.map(a => `<div class="rk ${a.mine ? 'mine' : ''}"><b>${a.now}</b><div class="t"><b>${a.name}</b><span>${a.post.who}: ${a.post.text}</span></div></div>`).join('')}</div></div>`);
+  }
+  const map = C.newMap('map');
+  map.on('load', () => {
+    C.restyle(map, P);
+    const opt = s === '2' ? { build: 'penha', noOpen: true } : { sel: 'alfama' };
+    cellLayers(map, opt); marks(map, opt);
+    if (s === '1') {
+      const el = document.createElement('div'); el.innerHTML = popHTML(C.byId.alfama);
+      const off = desk ? 0 : -50; el.firstChild.style.setProperty('--tail', `calc(50% - ${off}px)`);
+      const mk = new maplibregl.Marker({ element: el, anchor: 'top', offset: [off, 34] }).setLngLat(C.byId.alfama.c).addTo(map); mk.keep = true; C.markers.push(mk);
+    }
+    const view = desk ? { center: [-9.1345, 38.7150], zoom: 14.5, padding: { top: 0, bottom: 260, left: 380, right: 0 } }
+      : s === '2' ? { center: [-9.1290, 38.7258], zoom: 13.45, padding: { top: 0, bottom: 0, left: 0, right: 306 } }
+      : { center: [-9.1310, 38.7118], zoom: 13.9, padding: { top: 0, bottom: 60, left: 0, right: 0 } };
+    map.jumpTo(view);
+    const pop = document.querySelector('.pop');
+    const maxY = pop ? pop.getBoundingClientRect().top - 6 : innerHeight - 150;
+    if (!desk) C.cull(map, s === '2' ? 70 : 118, 22, maxY, s === '2' ? innerWidth - 306 : 1e9);
+    C.ready([map]);
+  });
+}
+
+function chatScreen() {
+  const a = C.byId[C.room.area], ev = C.events.find(e => e.id === 'e1');
+  let h = C.statusBar(true) + `<div class="chat"><div class="ch-head"><div class="back">${I.back}</div>
+    <div style="width:40px;height:40px;border-radius:12px;background:#1B1B1E;display:grid;place-items:center">${cellSVG('graca', 34, '#FFFFFF', false, 'rgba(255,176,32,.35)')}</div>
+    <div class="ch-t"><b>${a.name}</b><span>${a.members} neighbours, ${a.now} here now</span></div></div><div class="msgs">`;
+  let prev = null;
+  for (const m of C.room.msgs) {
+    if (m.event) {
+      h += `<div class="who">${m.who} is hosting</div><div class="evc"><div class="k">${ev.day} ${ev.date} Nov</div>
+        <div class="when"><b>${ev.time.replace(' pm', '')}</b><span>pm</span></div><h3>${ev.title}</h3><div class="pl">${ev.place}</div>
+        <div class="ft"><span>${ev.going} going</span><div class="pill">I'm going</div></div></div>`;
+      prev = null; continue;
+    }
+    if (m.me) { h += `<div class="row mine"><div class="bub">${m.text}</div></div>`; prev = 'me'; continue; }
+    if (prev !== m.who) h += `<div class="who">${m.who}</div>`;
+    h += `<div class="row"><div class="av" style="background:${AV[m.who]}">${C.initials(m.who)}</div><div class="bub">${m.text}</div></div>`;
+    prev = m.who;
+  }
+  h += `<div class="sys">Someone in ${a.name} joined</div></div>
+    <div class="composer"><div class="add">${I.plus.replace(/11/g, '15').replace('currentColor', '#F5F5F7')}</div><div class="ph">Message ${a.name}</div><div class="send">${I.send}</div></div></div>`;
+  app.innerHTML = h;
+  C.ready([]);
+}
+s === '3' ? chatScreen() : mapScreen();
+</script></body></html>

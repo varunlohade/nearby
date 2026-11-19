@@ -1,0 +1,305 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>A</title>
+<link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&display=block" rel="stylesheet">
+<script src="common.js"></script>
+<style>
+:root{
+  --ink:#0B0B0C; --ink2:#5E5E66; --ink3:#9A9AA2; --line:#E7E7EA; --fill:#F3F3F5;
+  --blue:#2B50F0; --blue-soft:#EEF1FF; --white:#fff;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:#fff;color:var(--ink);font-family:Geist,system-ui,sans-serif;-webkit-font-smoothing:antialiased;font-feature-settings:"tnum" 0}
+.num{font-variant-numeric:tabular-nums}
+#app{position:relative;width:100%;height:100%;overflow:hidden}
+#map{position:absolute;inset:0}
+.sb{position:absolute;top:0;left:0;right:0;height:50px;display:flex;align-items:center;justify-content:space-between;padding:4px 30px 0 34px;z-index:20;font-weight:600;font-size:16px;letter-spacing:-.01em}
+.sb-right{display:flex;gap:6px;align-items:center}
+.sb.glassy{background:rgba(255,255,255,.72);backdrop-filter:blur(14px) saturate(1.5);-webkit-backdrop-filter:blur(14px) saturate(1.5)}
+.msgs>*{flex-shrink:0}
+
+/* floating search */
+.search{position:absolute;top:56px;left:12px;right:12px;height:52px;border-radius:26px;z-index:10;
+  background:rgba(255,255,255,.78);backdrop-filter:blur(18px) saturate(1.6);-webkit-backdrop-filter:blur(18px) saturate(1.6);
+  box-shadow:0 0 0 .5px rgba(0,0,0,.08),0 6px 20px rgba(0,0,0,.08),0 1px 2px rgba(0,0,0,.06);
+  display:flex;align-items:center;padding:0 7px 0 18px;gap:10px;font-size:16px;color:var(--ink2)}
+.search .grow{flex:1}
+.me{width:38px;height:38px;border-radius:50%;background:var(--ink);color:#fff;display:grid;place-items:center;font-weight:600;font-size:14px}
+
+/* map labels */
+.lab{display:flex;flex-direction:column;align-items:center;gap:1px;padding:5px 10px 6px;border-radius:12px;background:#fff;
+  box-shadow:0 0 0 .5px rgba(0,0,0,.08),0 2px 6px rgba(0,0,0,.08),0 1px 1px rgba(0,0,0,.04);white-space:nowrap;pointer-events:none}
+.lab b{font-size:13px;font-weight:600;letter-spacing:-.01em}
+.lab span{font-size:11.5px;color:var(--ink2);font-variant-numeric:tabular-nums}
+.lab.mine{background:var(--ink);color:#fff;box-shadow:0 0 0 3px #fff,0 6px 16px rgba(0,0,0,.18)}
+.lab.mine span{color:rgba(255,255,255,.72)}
+.lab.sel{background:var(--blue);color:#fff;box-shadow:0 0 0 3px #fff,0 6px 16px rgba(43,80,240,.28)}
+.lab.sel span{color:rgba(255,255,255,.8)}
+.lab.c{flex-direction:row;gap:6px;padding:4px 4px 4px 10px;border-radius:14px;align-items:center}
+.lab.c b{font-size:12.5px}
+.lab.c em{font-style:normal;font-size:11.5px;font-weight:600;background:#EEF1FF;color:#2B50F0;border-radius:10px;padding:2px 7px;min-width:22px;text-align:center;font-variant-numeric:tabular-nums}
+.plus{width:22px;height:22px;border-radius:50%;background:#fff;border:1px solid #D7D7DC;display:grid;place-items:center;color:var(--ink3)}
+.cal{width:34px;border-radius:9px;background:#fff;text-align:center;overflow:hidden;
+  box-shadow:0 0 0 .5px rgba(0,0,0,.1),0 3px 8px rgba(0,0,0,.12),0 1px 1px rgba(0,0,0,.06)}
+.cal i{display:block;font-style:normal;font-size:9px;font-weight:600;color:#fff;background:var(--ink);padding:2px 0 1px;letter-spacing:.01em}
+.cal b{display:block;font-size:14px;font-weight:600;padding:2px 0 3px;font-variant-numeric:tabular-nums}
+
+/* sheet */
+.sheet{position:absolute;left:0;right:0;bottom:0;z-index:15;background:#fff;border-radius:28px 28px 0 0;
+  box-shadow:0 -1px 0 rgba(0,0,0,.04),0 -10px 40px rgba(0,0,0,.10);padding:8px 20px 34px}
+.grab{width:36px;height:5px;border-radius:3px;background:#D9D9DE;margin:0 auto 14px}
+.sheet h2{font-size:26px;font-weight:600;letter-spacing:-.025em;line-height:1.1}
+.sub{font-size:14px;color:var(--ink2);margin-top:4px;font-variant-numeric:tabular-nums}
+.hd{display:flex;justify-content:space-between;align-items:flex-start}
+.x{width:32px;height:32px;border-radius:50%;background:var(--fill);display:grid;place-items:center;color:var(--ink2);flex:none}
+.post{display:flex;gap:12px;margin-top:18px;padding:14px;border-radius:18px;background:var(--fill)}
+.av{width:34px;height:34px;border-radius:50%;flex:none;display:grid;place-items:center;font-weight:600;font-size:13px;color:#fff}
+.post .who{font-size:13px;font-weight:600}
+.post .who span{color:var(--ink3);font-weight:400;margin-left:6px}
+.post p{font-size:15px;line-height:1.35;margin-top:2px}
+.ev{display:flex;gap:12px;align-items:center;margin-top:12px;padding:4px 2px}
+.ev .cal{width:44px;flex:none;box-shadow:0 0 0 1px var(--line)}
+.ev .cal i{font-size:10px;padding:3px 0 2px}.ev .cal b{font-size:18px;padding:3px 0 4px}
+.ev .t{flex:1;min-width:0}
+.ev .t b{display:block;font-size:15px;font-weight:600}
+.ev .t span{display:block;font-size:13px;color:var(--ink2);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.going{font-size:13px;color:var(--ink2);flex:none;font-variant-numeric:tabular-nums}
+.btn{height:52px;border-radius:26px;background:var(--ink);color:#fff;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:600;margin-top:18px;letter-spacing:-.01em}
+.btn.blue{background:var(--blue)}
+.row2{display:flex;gap:10px}.row2 .btn{flex:1}
+.btn.ghost{background:var(--fill);color:var(--ink)}
+
+/* build */
+.field{margin-top:20px}
+.field label{font-size:13px;color:var(--ink2);font-weight:500}
+.input{margin-top:6px;height:54px;border-radius:16px;border:1.5px solid var(--ink);display:flex;align-items:center;padding:0 16px;font-size:17px;font-weight:500}
+.caret{width:2px;height:22px;background:var(--blue);margin-left:1px}
+.hint{font-size:13px;color:var(--ink3);margin-top:6px}
+.facts{margin-top:18px;display:flex;flex-direction:column;gap:14px}
+.fact{display:flex;gap:12px;align-items:flex-start;font-size:14px;line-height:1.35;color:var(--ink2)}
+.fact b{color:var(--ink);font-weight:600;display:block;font-size:15px}
+.ic{width:36px;height:36px;border-radius:12px;background:var(--fill);display:grid;place-items:center;flex:none;color:var(--ink)}
+
+/* chat */
+.chat{position:absolute;inset:0;background:#fff;display:flex;flex-direction:column}
+.ch-head{padding:52px 16px 10px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--line)}
+.back{width:40px;height:40px;display:grid;place-items:center;margin-left:-8px}
+.ch-title{flex:1}
+.ch-title b{display:block;font-size:17px;font-weight:600;letter-spacing:-.01em}
+.ch-title span{display:block;font-size:13px;color:var(--ink2);font-variant-numeric:tabular-nums}
+.hex-av{width:38px;height:38px;flex:none}
+.msgs{flex:1;padding:14px 14px 104px;display:flex;flex-direction:column;justify-content:flex-end;gap:3px;overflow:hidden}
+.day{align-self:center;font-size:12px;color:var(--ink3);margin:2px 0 10px}
+.m{display:flex;gap:8px;align-items:flex-end;max-width:84%}
+.m .av{width:28px;height:28px;font-size:11px}
+.m .bub{background:var(--fill);border-radius:20px;padding:9px 14px 10px;font-size:16px;line-height:1.32}
+.sender{font-size:12.5px;color:var(--ink2);margin:10px 0 3px 50px;font-weight:500}
+.m.mine{align-self:flex-end;max-width:300px}
+.m{width:fit-content}
+.m.mine .bub{background:var(--blue);color:#fff}
+.evc{margin:10px 0 8px 36px;width:268px;border-radius:22px;overflow:hidden;background:#fff;
+  box-shadow:0 0 0 1px var(--line),0 6px 20px rgba(0,0,0,.06)}
+.evc .mm{height:112px;position:relative}
+.evc .body{padding:12px 14px 14px}
+.evc .kick{font-size:12px;color:var(--blue);font-weight:600}
+.evc h3{font-size:17px;font-weight:600;letter-spacing:-.015em;margin-top:2px}
+.evc .meta{font-size:13.5px;color:var(--ink2);margin-top:4px;line-height:1.4}
+.evc .foot{display:flex;align-items:center;justify-content:space-between;margin-top:12px}
+.stack{display:flex;align-items:center}
+.stack .av{width:24px;height:24px;font-size:10px;border:2px solid #fff;margin-left:-6px}
+.stack .av:first-child{margin-left:0}
+.stack span{font-size:13px;color:var(--ink2);margin-left:6px}
+.pill{height:36px;padding:0 16px;border-radius:18px;background:var(--ink);color:#fff;font-size:14px;font-weight:600;display:flex;align-items:center}
+.composer{position:absolute;left:10px;right:10px;bottom:28px;height:54px;border-radius:27px;display:flex;align-items:center;gap:8px;padding:0 7px;
+  background:rgba(255,255,255,.8);backdrop-filter:blur(18px) saturate(1.6);-webkit-backdrop-filter:blur(18px) saturate(1.6);
+  box-shadow:0 0 0 .5px rgba(0,0,0,.1),0 8px 24px rgba(0,0,0,.08)}
+.composer .add{width:40px;height:40px;border-radius:50%;background:var(--fill);display:grid;place-items:center}
+.composer .ph{flex:1;font-size:16px;color:var(--ink3)}
+.composer .send{width:40px;height:40px;border-radius:50%;background:var(--blue);display:grid;place-items:center;color:#fff}
+.hostchip{position:absolute;left:14px;bottom:94px;display:none}
+.youchip{position:absolute;z-index:12;left:12px;top:118px;display:flex;align-items:center;gap:8px;height:34px;padding:0 12px 0 10px;border-radius:17px;
+  background:rgba(255,255,255,.86);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);font-size:13px;color:var(--ink2);
+  box-shadow:0 0 0 .5px rgba(0,0,0,.08),0 4px 12px rgba(0,0,0,.06)}
+.youchip b{color:var(--ink);font-weight:600}
+
+/* desktop */
+.desk .search{top:24px;left:24px;right:auto;width:400px}
+.desk .youchip{left:24px;top:86px}
+.desk .sheet{left:24px;right:auto;bottom:24px;width:400px;border-radius:28px;padding:20px 22px 22px;box-shadow:0 0 0 .5px rgba(0,0,0,.06),0 20px 50px rgba(0,0,0,.14),0 2px 6px rgba(0,0,0,.06)}
+.desk .grab{display:none}
+.zoom{position:absolute;right:24px;bottom:24px;z-index:10;border-radius:14px;background:#fff;box-shadow:0 0 0 .5px rgba(0,0,0,.08),0 4px 14px rgba(0,0,0,.08);overflow:hidden}
+.zoom div{width:44px;height:44px;display:grid;place-items:center;font-size:20px;color:var(--ink)}
+.zoom div+div{border-top:1px solid var(--line)}
+.up{position:absolute;right:24px;top:24px;z-index:10;width:300px;background:#fff;border-radius:22px;padding:16px 16px 8px;
+  box-shadow:0 0 0 .5px rgba(0,0,0,.06),0 14px 40px rgba(0,0,0,.10),0 2px 6px rgba(0,0,0,.05)}
+.up h4{font-size:15px;font-weight:600}
+.up .ev{margin-top:10px}
+.up .ev .cal{width:38px}.up .ev .cal b{font-size:15px}
+.up .ev .t b{font-size:14px}.up .ev .t span{font-size:12.5px}
+</style></head>
+<body><div id="app"></div>
+<script>
+const P = { land:'#F4F4F2', water:'#DCE4EC', park:'#E6ECDF', building:'#EBEBE8', road:'#FFFFFF', casing:'#E9E9E6', rail:'#E2E2E0', roadLabels:'#A9A9AE' };
+const avColor = n => ({'Inês':'#C2410C','Tomás':'#0F766E','Carla':'#7C3AED','Rui':'#B45309','Ana':'#0369A1','Marta':'#BE185D','João':'#15803D','Leila':'#4338CA','Tom':'#0E7490','Sofia':'#A21CAF'}[n]||'#555');
+const I = {
+  search:'<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>',
+  plus:'<svg width="12" height="12" viewBox="0 0 12 12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M6 1.5v9M1.5 6h9"/></svg>',
+  x:'<svg width="12" height="12" viewBox="0 0 12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m2 2 8 8M10 2l-8 8"/></svg>',
+  back:'<svg width="12" height="20" viewBox="0 0 12 20" fill="none" stroke="#0B0B0C" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2 2 10l8 8"/></svg>',
+  lock:'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="10.5" width="15" height="10" rx="2.5"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/></svg>',
+  crown:'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M3.5 8l4.5 4 4-7 4 7 4.5-4-2 11h-13z"/></svg>',
+  send:'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20V5M5.5 11.5 12 5l6.5 6.5"/></svg>',
+  cal:'<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3.5" y="5" width="17" height="15" rx="3"/><path d="M3.5 10h17M8 3v4M16 3v4"/></svg>',
+  hexpin:'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 2.5 20.5 7.4v9.2L12 21.5l-8.5-4.9V7.4z"/></svg>',
+};
+const app = document.getElementById('app');
+const s = C.screen, desk = C.desk;
+if (desk) app.classList.add('desk');
+
+function hexLayers(map, opt) {
+  const { hexes, edges } = C.hexgrid(165, 2600);
+  const busy = Object.fromEntries(C.claimed().map(a => [a.id, a.now]));
+  const feats = hexes.map(h => C.poly(h.ring, { area: h.area || '', claimed: h.area && !C.byId[h.area].empty ? 1 : 0,
+    heat: h.area && busy[h.area] ? 0.10 + 0.34 * Math.min(1, busy[h.area] / 40) : 0 }));
+  map.addSource('hex', { type: 'geojson', data: C.fc(feats) });
+  map.addLayer({ id: 'hex-grid', type: 'line', source: 'hex', paint: { 'line-color': '#C9C9CF', 'line-width': 0.7, 'line-opacity': 0.75 } });
+  map.addLayer({ id: 'hex-fill', type: 'fill', source: 'hex', filter: ['==', ['get', 'claimed'], 1],
+    paint: { 'fill-color': '#2B50F0', 'fill-opacity': ['get', 'heat'] } });
+  map.addLayer({ id: 'hex-inner', type: 'line', source: 'hex', filter: ['==', ['get', 'claimed'], 1],
+    paint: { 'line-color': '#FFFFFF', 'line-width': 0.9, 'line-opacity': 0.9 } });
+  const lines = [];
+  for (const [id, segs] of Object.entries(edges)) for (const sgm of segs) lines.push(C.line(sgm, { area: id, empty: C.byId[id].empty ? 1 : 0, mine: C.byId[id].mine ? 1 : 0, sel: id === opt.sel ? 1 : 0 }));
+  map.addSource('edges', { type: 'geojson', data: C.fc(lines) });
+  map.addLayer({ id: 'edge', type: 'line', source: 'edges', filter: ['all', ['==', ['get', 'empty'], 0], ['==', ['get', 'mine'], 0]],
+    layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': '#2B50F0', 'line-width': ['case', ['==', ['get', 'sel'], 1], 3, 1.4] } });
+  map.addLayer({ id: 'edge-mine', type: 'line', source: 'edges', filter: ['==', ['get', 'mine'], 1],
+    layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': '#0B0B0C', 'line-width': 3 } });
+  if (opt.build) {
+    map.addLayer({ id: 'hex-build', type: 'fill', source: 'hex', filter: ['==', ['get', 'area'], opt.build], paint: { 'fill-color': '#0B0B0C', 'fill-opacity': 0.08 } });
+    map.addLayer({ id: 'edge-build', type: 'line', source: 'edges', filter: ['==', ['get', 'area'], opt.build],
+      layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': '#0B0B0C', 'line-width': 2.4, 'line-dasharray': [1.6, 1.4] } });
+  }
+}
+
+function labels(map, opt) {
+  for (const a of C.areas) {
+    if (a.empty) {
+      if (a.id === opt.build) C.marker(map, a.c, `<div class="lab" style="background:#0B0B0C;color:#fff;box-shadow:0 0 0 3px #fff,0 6px 16px rgba(0,0,0,.2)"><b>New area</b><span style="color:rgba(255,255,255,.75)">No one here yet</span></div>`);
+      else C.marker(map, a.c, `<div class="plus">${I.plus}</div>`);
+      continue;
+    }
+    if (opt.compact && !a.mine && a.id !== opt.sel) { continue; }
+    if (a.mine || a.id === opt.sel) {
+      const cls = a.mine ? 'lab mine' : 'lab sel';
+      const sub = a.mine ? `You're here, ${a.now} now` : `${a.now} here now`;
+      C.marker(map, a.c, `<div class="${cls}"><b>${a.name}</b><span>${sub}</span></div>`);
+    } else C.marker(map, a.c, `<div class="lab c"><b>${a.name}</b><em>${a.now}</em></div>`);
+  }
+  for (const e of C.events) {
+    if (opt.noEvents) continue;
+    C.marker(map, e.at, `<div class="cal"><i>${e.day}</i><b>${e.date}</b></div>`, 'bottom');
+  }
+}
+
+function search() {
+  return `<div class="search">${I.search}<span class="grow">Search areas in Lisbon</span><div class="me">V</div></div>`;
+}
+
+function evRow(e) {
+  return `<div class="ev"><div class="cal"><i>${e.day}</i><b>${e.date}</b></div><div class="t"><b>${e.title}</b><span>${e.time}, ${e.place}</span></div><div class="going">${e.going} going</div></div>`;
+}
+
+function peekSheet(a) {
+  const e = C.events.find(x => x.area === a.id);
+  return `<div class="sheet"><div class="grab"></div>
+    <div class="hd"><div><h2>${a.name}</h2><div class="sub">${a.members} neighbours, ${a.now} here now</div></div><div class="x">${I.x}</div></div>
+    <div class="post"><div class="av" style="background:${avColor(a.post.who)}">${C.initials(a.post.who)}</div>
+      <div><div class="who">${a.post.who}<span>${a.post.ago}</span></div><p>${a.post.text}</p></div></div>
+    ${e ? evRow(e) : ''}
+    <div class="btn">Join ${a.name}</div></div>`;
+}
+
+function buildSheet(a) {
+  return `<div class="sheet"><div class="grab"></div>
+    <div class="hd"><div><h2>Build your<br>neighbourhood</h2><div class="sub" style="margin-top:8px">No one has started this area yet.</div></div><div class="x">${I.x}</div></div>
+    <div class="field"><label>Name it</label><div class="input">${a.name}<span class="caret"></span></div><div class="hint">You can change it later.</div></div>
+    <div class="facts">
+      <div class="fact"><div class="ic">${I.crown}</div><div><b>You become the founder</b>You open the chat and host the first event.</div></div>
+      <div class="fact"><div class="ic">${I.lock}</div><div><b>Only the area is shared</b>Neighbours see "someone in ${a.name}". Your exact spot stays on your phone.</div></div>
+    </div>
+    <div class="btn blue">Build ${a.name}</div></div>`;
+}
+
+function youChip() {
+  const me = C.areas.find(a => a.mine);
+  return `<div class="youchip">${I.lock}<span>Others see you as <b>someone in ${me.name}</b></span></div>`;
+}
+
+async function mapScreen() {
+  app.innerHTML = (desk ? '' : C.statusBar(false)) + '<div id="map"></div>' + search();
+  const map = C.newMap("map"); window._m = map;
+  const opt = s === '2' ? { build: 'penha', compact: false } : { sel: 'alfama' };
+  let sheetHTML = s === '2' ? buildSheet(C.byId.penha) : peekSheet(C.byId.alfama);
+  app.insertAdjacentHTML('beforeend', sheetHTML);
+  if (s === '1') app.insertAdjacentHTML('beforeend', youChip());
+  if (desk) {
+    app.insertAdjacentHTML('beforeend', `<div class="zoom"><div>+</div><div>−</div></div>
+      <div class="up"><h4>Coming up near you</h4>${C.events.slice(0, 4).map(evRow).join('')}</div>`);
+  }
+  const sheetH = document.querySelector('.sheet').offsetHeight;
+  map.on('load', () => {
+    C.restyle(map, P);
+    hexLayers(map, opt);
+    labels(map, opt);
+    const view = desk ? { center: [-9.1372, 38.7172], zoom: 14.55, padding: { top: 0, bottom: 0, left: 440, right: 330 } }
+      : s === '2' ? { center: [-9.1300, 38.7246], zoom: 14.25, padding: { top: 110, bottom: sheetH, left: 0, right: 0 } }
+      : { center: [-9.1336, 38.7150], zoom: 14.05, padding: { top: 150, bottom: sheetH, left: 0, right: 0 } };
+    map.jumpTo(view);
+    if (!desk) C.cull(map, 128);
+    C.ready([map]);
+  });
+}
+
+function chatScreen() {
+  const area = C.byId[C.room.area];
+  const ev = C.events.find(e => e.id === 'e1');
+  let html = C.statusBar(false) + `<div class="chat">
+   <div class="ch-head"><div class="back">${I.back}</div>
+     <svg class="hex-av" viewBox="0 0 40 40"><path d="M20 2 35.6 11v18L20 38 4.4 29V11z" fill="#0B0B0C"/><text x="20" y="25.5" text-anchor="middle" font-family="Geist" font-weight="600" font-size="14" fill="#fff">G</text></svg>
+     <div class="ch-title"><b>${area.name}</b><span>${area.members} neighbours, ${area.now} here now</span></div>
+     <div class="x" style="width:40px;height:40px">${I.cal}</div></div>
+   <div class="msgs"><div class="day">Today</div>`;
+  let prev = null;
+  for (const m of C.room.msgs) {
+    if (m.event) {
+      html += `<div class="m" style="max-width:100%"><div class="av" style="background:${avColor(m.who)}">${C.initials(m.who)}</div><div class="evc" style="margin:6px 0 0 0">
+        <div class="mm" id="mm"></div>
+        <div class="body"><div class="kick">${m.who} is hosting</div><h3>${ev.title}</h3>
+        <div class="meta">${ev.day} ${ev.date} Nov, ${ev.time}<br>${ev.place}</div>
+        <div class="foot"><div class="stack"><div class="av" style="background:#0F766E">T</div><div class="av" style="background:#7C3AED">C</div><div class="av" style="background:#B45309">R</div><span>${ev.going} going</span></div><div class="pill">I'm going</div></div></div></div></div>`;
+      prev = null; continue;
+    }
+    if (m.me) { html += `<div class="m mine" style="margin-top:10px"><div class="bub">${m.text}</div></div>`; prev = 'me'; continue; }
+    const first = prev !== m.who;
+    if (first) html += `<div class="sender">${m.who}</div>`;
+    html += `<div class="m"><div class="av" style="background:${avColor(m.who)};${first ? '' : 'visibility:hidden'}">${C.initials(m.who)}</div><div class="bub">${m.text}</div></div>`;
+    prev = m.who;
+  }
+  html += `<div class="day" style="margin-top:14px">Someone in ${area.name} joined</div></div>
+   <div class="composer"><div class="add">${I.plus.replace(/12/g, '16')}</div><div class="ph">Message ${area.name}</div><div class="send">${I.send}</div></div></div>`;
+  app.innerHTML = html;
+  const mm = C.newMap('mm', { center: ev.at, zoom: 15.6 });
+  mm.on('load', () => {
+    C.restyle(mm, P);
+    hexLayers(mm, {});
+    C.marker(mm, ev.at, `<div class="cal"><i>${ev.day}</i><b>${ev.date}</b></div>`, 'bottom');
+    mm.jumpTo({ center: [-9.1294, 38.7170], zoom: 14.7 });
+    C.ready([mm]);
+  });
+}
+
+if (s === '3') chatScreen(); else mapScreen();
+</script></body></html>

@@ -1,0 +1,5 @@
+<!doctype html><html><head><link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet"><script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<style>html,body,#m{margin:0;height:100%}</style></head><body><div id="m"></div><script>
+const map=new maplibregl.Map({container:'m',style:'https://tiles.openfreemap.org/styles/liberty',center:[77.6412,12.9719],zoom:15,pitch:60,bearing:-20});
+map.on('idle',()=>console.log('idle'));map.on('error',e=>console.log('err',e.error&&e.error.message));
+</script></body></html>

@@ -1,0 +1,22 @@
+<!doctype html><html><head><meta charset="utf-8"><title>compare</title>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;600;700&display=block" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#fff;font-family:Geist,sans-serif;color:#0B0B0C;padding:44px 48px 48px}
+.wrap{display:flex;gap:56px}
+.d{flex:1}
+.h{display:flex;align-items:baseline;gap:16px;margin-bottom:22px}
+.h b{font-size:96px;font-weight:700;line-height:.8;letter-spacing:-.04em}
+.h span{font-size:28px;font-weight:600;color:#5E5E66}
+.row{display:flex;gap:14px}
+.row figure{flex:1}
+.row img{width:100%;display:block;border-radius:26px;box-shadow:0 0 0 1px #E4E4E8}
+figcaption{font-size:16px;color:#8A8A92;margin-top:10px;text-align:center}
+</style></head><body><div class="wrap">
+<div class="d"><div class="h"><b>A</b><span>Quiet hex tiles</span></div><div class="row">
+<figure><img src="../A-1-map.png"><figcaption>Map</figcaption></figure><figure><img src="../A-2-build.png"><figcaption>Build</figcaption></figure><figure><img src="../A-3-chat.png"><figcaption>Chat</figcaption></figure></div></div>
+<div class="d"><div class="h"><b>B</b><span>Sticker block party</span></div><div class="row">
+<figure><img src="../B-1-map.png"><figcaption>Map</figcaption></figure><figure><img src="../B-2-build.png"><figcaption>Build</figcaption></figure><figure><img src="../B-3-chat.png"><figcaption>Chat</figcaption></figure></div></div>
+<div class="d"><div class="h"><b>C</b><span>Night activity cells</span></div><div class="row">
+<figure><img src="../C-1-map.png"><figcaption>Map</figcaption></figure><figure><img src="../C-2-build.png"><figcaption>Build</figcaption></figure><figure><img src="../C-3-chat.png"><figcaption>Chat</figcaption></figure></div></div>
+</div><script>Promise.all([document.fonts.ready,...[...document.images].map(i=>i.decode())]).then(()=>document.title='ready')</script></body></html>
