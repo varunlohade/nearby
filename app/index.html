@@ -4,11 +4,21 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#030508" />
-    <meta name="description" content="See what is happening around you and join the local conversation." />
+    <meta name="description" content="A live map of what's happening around you. Create events, communities and live audio rooms anywhere, talk to neighbours and people around the world, ask an AI local guide, and roam your real streets." />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="nearby" />
+    <meta property="og:title" content="nearby — your world, live" />
+    <meta property="og:description" content="Create events and communities anywhere, talk to people nearby and around the world, ask an AI local guide, and roam your real streets." />
+    <meta property="og:url" content="https://nearby-world.vercel.app/" />
+    <meta property="og:image" content="https://nearby-world.vercel.app/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:image" content="https://nearby-world.vercel.app/og.png" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:ital,wght@0,600;0,700;0,800;1,800&family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet" />
-    <title>nearby — the world around you, live</title>
+    <title>nearby — your world, live</title>
   </head>
   <body>
     <canvas id="world" aria-label="Interactive three-dimensional Earth"></canvas>
@@ -36,9 +46,9 @@
 
     <main id="app">
       <section class="arrival" id="arrival" aria-live="polite">
-        <span class="mono kicker" id="arrival-kicker">World map</span>
-        <h1 id="arrival-title">Entering<br /><em>the world.</em></h1>
-        <p id="arrival-copy">Finding your approximate area…</p>
+        <span class="mono kicker" id="arrival-kicker">nearby · live everywhere</span>
+        <h1 id="arrival-title">Your world,<br /><em>live.</em></h1>
+        <p id="arrival-copy">See what's happening around you, start something anywhere, and talk to people nearby and around the world.</p>
         <div class="loader">
           <div class="loader-track"><i id="progress"></i></div>
           <div class="loader-meta mono"><span id="arrival-status">Building Earth</span><span id="progress-number">08%</span></div>

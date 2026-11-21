@@ -3,6 +3,7 @@ import './atlas-hud.css';
 import './free-roam.css';
 import { StreetAtlas } from './world/atlas';
 import { mountAsk } from './ask/ask';
+import { mountLanding } from './landing/landing';
 import { mountCreate, type Created } from './create/create';
 import { mountCommunities } from './community/community';
 import { chatPanel as createChatPanel } from './chat/panel';
@@ -361,6 +362,7 @@ async function start() {
     map: () => atlas['map'], place: () => place, user: () => chat.user,
     openChat: (id, title, kind) => { closeEvent(); void chat.openRoom(id, title, kind); setChatOpen(true); },
   });
+  const landing = mountLanding();
   world = new EarthExperience(canvas);
   world.enableNavigation(canvas, (lat,lng) => { void landOnGlobe(lat,lng); });
   if (new URLSearchParams(location.search).has('globe')) {
@@ -380,6 +382,9 @@ async function start() {
     detectPlace(),
     world.ready((value, label) => setProgress(8 + value * 25, label)),
   ]);
+  // First-time visitors read what nearby does, then press "Explore".
+  setProgress(36, 'Globe ready');
+  await landing.ready(detected.locality);
   await landAt(detected);
 }
 

@@ -1,0 +1,74 @@
+/* First screen: what nearby does, at a glance. Matches the street-atlas HUD. */
+.arrival h1 { font-size: clamp(54px, 6vw, 92px); }
+.landing { margin-top: 22px; transition: opacity .45s, max-height .6s ease, margin .6s ease; max-height: 600px; overflow: hidden; }
+.arrival.landing-flying .landing, .orbit-explore .landing { opacity: 0; max-height: 0; margin-top: 0; pointer-events: none; }
+.landing-features { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.landing-features li {
+  display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 10px; align-items: start;
+  padding: 10px 12px; background: #151818d9; border: 1px solid #ffffff1f; border-left: 3px solid var(--accent); border-radius: 3px;
+  backdrop-filter: blur(6px); opacity: 0; animation: landing-in .5s ease forwards;
+}
+.landing-features li:nth-child(1) { animation-delay: .15s; } .landing-features li:nth-child(2) { animation-delay: .25s; }
+.landing-features li:nth-child(3) { animation-delay: .35s; } .landing-features li:nth-child(4) { animation-delay: .45s; }
+.landing-features li:nth-child(5) { animation-delay: .55s; } .landing-features li:nth-child(6) { animation-delay: .65s; }
+@keyframes landing-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.landing-icon { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 2px; background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+.landing-icon svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.landing-features b { display: block; color: #fff5df; font: 700 18px/1.1 var(--display, sans-serif); text-transform: uppercase; letter-spacing: .01em; }
+.landing-features small { display: block; margin-top: 3px; color: #c9c8be; font: 12.5px/1.4 Geist, sans-serif; }
+.landing-privacy { margin: 12px 0 0; color: #9fe9d6; font: 500 11.5px "Geist Mono", monospace; letter-spacing: .02em; }
+.landing-privacy span { margin-right: 4px; }
+
+.landing-cta { display: flex; align-items: center; gap: 14px; margin-top: 20px; }
+.landing-cta[hidden] { display: none; }
+.landing-go {
+  height: 52px; padding: 0 22px; border: 0; border-radius: 3px; background: var(--accent); color: var(--accent-ink, #1b1408);
+  font: italic 800 24px/1 var(--display, sans-serif); text-transform: uppercase; letter-spacing: .01em;
+  box-shadow: 0 10px 30px #0008; cursor: pointer; animation: landing-in .4s ease;
+}
+.landing-go:hover { filter: brightness(1.08); transform: translateY(-1px); }
+.landing-change { padding: 0; border: 0; background: none; color: #d9d9cd; font: 500 13px Geist, sans-serif; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.arrival.landing-waiting .loader { opacity: .45; }
+
+.landing-about-button { font: 700 18px/1 var(--display, sans-serif); color: #f1eee5; }
+.landing-about .dialog-card { width: min(640px, calc(100vw - 24px)); max-height: 90dvh; overflow: auto; }
+.landing-about .landing-features li { opacity: 1; animation: none; }
+.landing-about .dialog-card > p { margin-bottom: 16px; }
+
+@media (max-height: 820px) and (min-width: 721px) {
+  .arrival h1 { font-size: clamp(48px, 5vw, 72px); }
+  .landing-features small { font-size: 11.5px; }
+  .landing-features li { padding: 8px 10px; }
+}
+@media (max-width: 720px) {
+  .arrival h1 { font-size: 46px; }
+  .arrival p { font-size: 14px; }
+  .landing { margin-top: 14px; }
+  .landing-features { gap: 6px; }
+  .landing-features li { grid-template-columns: 26px minmax(0, 1fr); gap: 8px; padding: 7px 8px; }
+  .landing-icon { width: 26px; height: 26px; }
+  .landing-icon svg { width: 16px; height: 16px; }
+  .landing-features b { font-size: 15px; }
+  .landing-features small { display: none; }
+  .landing-about .landing-features small { display: block; }
+  .landing-privacy { font-size: 10.5px; }
+  .landing-go { height: 48px; font-size: 21px; flex: 1; }
+}
+
+/* While the overview waits for "Explore": anchor it under the top bar and use a wider,
+   three-column grid so it fits short laptop screens; the loader returns once flying. */
+@media (min-width: 721px) {
+  .arrival.landing-waiting { top: 104px; transform: none; width: min(900px, 60vw); }
+  .arrival.landing-waiting h1 { font-size: clamp(46px, 5vw, 80px); margin: 12px 0 12px; }
+  .arrival.landing-waiting > p { max-width: 560px; font-size: 15px; }
+  .arrival.landing-waiting .landing-features { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+.arrival.landing-waiting .loader { display: none; }
+.arrival .landing-privacy { max-width: none; font-size: 11.5px; line-height: 1.4; color: #9fe9d6; }
+@media (max-width: 720px) { .arrival .landing-privacy { font-size: 10.5px; } }
+@media (max-height: 760px) and (min-width: 721px) {
+  .arrival.landing-waiting { top: 88px; }
+  .arrival.landing-waiting h1 { font-size: clamp(40px, 4.2vw, 64px); }
+  .landing-features small { font-size: 11px; line-height: 1.35; }
+}
+.arrival > p, .arrival h1, .arrival .kicker { text-shadow: 0 2px 14px #000c, 0 0 2px #000; }
