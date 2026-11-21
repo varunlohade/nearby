@@ -1,16 +1,33 @@
 // Free Roam: an open-world sandbox of the visitor's real neighbourhood.
-// Drive, walk or fly a drone through streets and buildings read from the map,
-// find places (activities, rooms, events, live audio, parks), follow a GPS
-// route or jump there, and hear live audio venues when you get close.
+// Drive, walk or fly a drone through streets and buildings streamed from the
+// map, take any car, find places (activities, rooms, events, live audio, parks),
+// follow a GPS route or jump there, and hear live audio venues up close.
+//
+// References and credits (see also the in-app credits on the help card):
+//   Character "Business Man" by Quaternius, CC0 1.0 (poly.pizza/m/JFrLIKqvCH).
+//   Sketchbook by swift502 (MIT): spring-based character velocity/rotation
+//     (springs.ts), camera-relative movement, and the enter/exit-car flow
+//     (walk to the door seat point, door gesture, take the seat; reverse to exit).
+//   pmndrs/racing-game (MIT): raycast-vehicle numbers and the speed/steer-based
+//     chase camera offset (vehicles.ts and updateCamera below).
+//   Bruno Simon's folio-2019 (MIT): playful cannon-es tuning on low-end devices.
+//   cannon-es (MIT) physics. three.js webgl_animation_skinning_blending (MIT):
+//     crossfaded clip weights (human.ts).
+// Map data © OpenStreetMap contributors via OpenFreeMap/OpenMapTiles.
 
 import * as THREE from 'three';
+import * as CANNON from 'cannon-es';
 import type maplibregl from 'maplibre-gl';
 import './roam.css';
 import { AudioSession } from '../create/audio';
 import type { Activity, Place } from '../world/earth';
-import { extractWorld, Frame, type WorldData, type XZ } from './data';
-import { RoadGraph } from './graph';
-import { buildAreas, buildBuildings, buildGround, buildRoads, COLORS, makeBeacon, makeCar, makeRoute, makeSparks, makeTraffic, makeWalker } from './build';
+import { Frame, type XZ } from './data';
+import { WorldStream } from './stream';
+import { COLORS, makeBeacon, makeCar, makeRoute, makeSparks, makeTraffic } from './build';
+import { Crowd, loadHuman, Walker, type HumanAsset } from './human';
+import { DynamicResolution, detectQuality } from './quality';
+import { Spring } from './springs';
+import { CAR, Vehicle } from './vehicles';
 
 export interface RoamOptions {
   map: maplibregl.Map;
@@ -27,26 +44,31 @@ interface Spot {
   beacon?: ReturnType<typeof makeBeacon>; label?: HTMLElement;
 }
 interface TrafficCar {
-  edge: number; from: number; t: number; speed: number; cruise: number; color: THREE.Color;
+  edge: number; from: number; t: number; speed: number; cruise: number; color: number;
   x: number; z: number; h: number; shown: number;
-  bumped: number; vx: number; vz: number; spin: number;
+  body?: CANNON.Body;       // kinematic near the player, dynamic after a crash
+  crashed: number;          // seconds since it became dynamic (0 = driving)
+  still: number;            // seconds at rest while crashed
+  sinking: number;
 }
+interface Prop { body: CANNON.Body; mesh: THREE.Mesh }
 
-const RADIUS = 900;
 const LISTEN_RADIUS = 60;
+const STEP = 1 / 60;
 const KIND_COLOR: Record<string, number> = {
-  activity: 0xf5bd52, event: 0xf5bd52, room: 0x75c4ee, audio: 0xf495ae, community: 0x9dc48c,
-  park: 0x7fbf8a, landmark: 0xe8dcc1,
+  activity: 0xf5bd52, event: 0xf5bd52, room: 0x75c4ee, audio: 0xf495ae, community: 0x9dc48c, park: 0x7fbf8a, landmark: 0xe8dcc1,
 };
 const KIND_LABEL: Record<string, string> = {
   activity: 'Activity', event: 'Event', room: 'Chat room', audio: 'Live audio', community: 'Community', park: 'Park', landmark: 'Landmark',
 };
+const CAR_COLORS = [0xd46b59, 0x82abb9, 0xc8c6ba, 0x8994b7, 0x6f8f72, 0xb88a5e, 0x9b6f8e, 0xe0e0d8, 0x4f6d8f, 0xa14848];
 // Countries that drive on the left, so traffic keeps to the correct side.
 const LEFT_HAND = /India|United Kingdom|Ireland|Japan|Australia|New Zealand|South Africa|Singapore|Malaysia|Indonesia|Thailand|Sri Lanka|Pakistan|Bangladesh|Nepal|Kenya|Hong Kong|Cyprus|Malta|Jamaica/i;
 
 const esc = (s: string) => s.replace(/[&<>'"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[c]!);
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 const fmtDist = (m: number) => (m < 1000 ? Math.round(m / 10) * 10 + ' m' : (m / 1000).toFixed(1) + ' km');
+const wrap = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
 
 let active: Roam | undefined;
 
@@ -61,37 +83,54 @@ class Roam {
   private root = document.createElement('div');
   private renderer!: THREE.WebGLRenderer;
   private scene = new THREE.Scene();
-  private camera = new THREE.PerspectiveCamera(62, innerWidth / innerHeight, 0.3, 2600);
+  private camera = new THREE.PerspectiveCamera(62, innerWidth / innerHeight, 0.3, 1200);
   private frame!: Frame;
-  private world!: WorldData;
-  private graph!: RoadGraph;
-  private segments = new Float32Array();
-  private segGrid = new Map<number, number[]>();
-  private names: { name: string; ax: number; az: number; bx: number; bz: number }[] = [];
-  private nameGrid = new Map<number, number[]>();
+  private stream!: WorldStream;
+  private graphVersion = -1;
   private spots: Spot[] = [];
+  private spotsAt: XZ = [1e9, 1e9];
   private savedCamera?: maplibregl.CameraOptions;
   private raf = 0;
   private disposed = false;
   private touch = matchMedia('(pointer: coarse)').matches || innerWidth < 760;
+  private q = detectQuality();
+  private dynres?: DynamicResolution;
   private driveLeft = false;
+  private ground!: THREE.Mesh;
+
+  // Physics.
+  private world = new CANNON.World({ gravity: new CANNON.Vec3(0, -9.82, 0) });
+  private physAcc = 0;
+  private pendingCrash: { t: TrafficCar; vx: number; vz: number }[] = [];
+  private props: Prop[] = [];
 
   // Player.
   private mode: Mode = 'car';
-  private car = { x: 0, z: 0, h: 0, vx: 0, vz: 0, steer: 0, mesh: makeCar(COLORS.accent) };
-  private walker = { x: 0, z: 0, h: 0, mesh: makeWalker(), step: 0 };
+  private vehicles: Vehicle[] = [];
+  private driving?: Vehicle;
+  private lastCar?: Vehicle;
+  private human?: Walker;
+  private crowd?: Crowd;
+  private humanAsset?: Promise<HumanAsset | null>;
+  private walker = { x: 0, z: 0, h: 0 };
   private drone = { x: 0, z: 0, h: 0, alt: 70 };
   private keys = new Set<string>();
   private stick = { x: 0, y: 0 };
   private touchButtons = new Set<string>();
+  private running = false;
+  private camYaw = new Spring(60, 12, 0.7);
+  private dragYaw = 0;
+  private dragUntil = 0;
   private lastHit = 0;
   private stuck = 0;
   private shake = 0;
+  private nearCar?: Vehicle | TrafficCar;
+  private seat = 0;                 // seconds left in the enter/exit transition
 
-  // World objects.
+  // Traffic and effects.
   private traffic: TrafficCar[] = [];
   private trafficMesh!: ReturnType<typeof makeTraffic>;
-  private sparks = makeSparks();
+  private sparks = makeSparks(120);
   private sparkLife: { vx: number; vy: number; vz: number; life: number }[] = [];
   private beaconTime = 0;
   private route?: { mesh: THREE.Mesh; points: XZ[]; target: Spot | { name: string; x: number; z: number }; checked: number };
@@ -105,32 +144,55 @@ class Roam {
   private muteUntilOutside = new Set<string>();
   private joining = false;
 
-  // HUD.
+  // HUD and stats.
   private minimap!: HTMLCanvasElement;
-  private roadsImage!: HTMLCanvasElement;
-  private readonly mapScale = 0.75; // px per metre in the pre-rendered road image
   private fpsFrames: number[] = [];
   private nextTick = 0;
   private timers: number[] = [];
+  private lastNow = 0;
+  private toastTimer = 0;
+  private stats: Record<string, number | string> = {};
+  private started = performance.now();
+
+  // Scratch objects (no per-frame allocations).
+  private readonly tmp = {
+    m: new THREE.Matrix4(), q: new THREE.Quaternion(), p: new THREE.Vector3(), s: new THREE.Vector3(1, 1, 1), up: new THREE.Vector3(0, 1, 0),
+    want: new THREE.Vector3(), look: new THREE.Vector3(), v: new THREE.Vector3(), hit: { dx: 0, dz: 0, nx: 0, nz: 0 }, cq: new CANNON.Quaternion(),
+  };
+  private inputState = { x: 0, y: 0, drift: false, up: false, down: false, sprint: false };
+  /** Test-only autopilot (?roamdebug): follows a route through the streets. */
+  private autopilot?: { points: XZ[]; i: number; slow: number; dir: number; back: number };
 
   constructor(private options: RoamOptions) {}
 
   // ---------------------------------------------------------------- lifecycle
   async start() {
     this.mountShell();
+    this.humanAsset = loadHuman().catch(error => { console.warn('[roam] character model unavailable', error); return null; });
     try {
-      await this.loadWorld();
+      await this.loadFirstArea();
     } catch (error) {
       console.error('[roam]', error);
       this.root.querySelector('.roam-loading p')!.textContent = 'Street data did not load. Try again in a moment.';
       return;
     }
-    this.buildScene();
+    this.setupScene();
+    this.setupPhysics();
     await this.loadSpots();
+    const asset = await this.humanAsset;
+    if (asset) {
+      this.human = new Walker(asset);
+      this.human.object.visible = false;
+      this.scene.add(this.human.object);
+      this.crowd = new Crowd(asset, this.stream.graph, this.q.pedestrians, this.touch ? 110 : 150);
+      this.scene.add(this.crowd.group);
+    }
     this.spawn();
     this.root.querySelector('.roam-loading')!.remove();
+    this.stats.firstPlayableMs = Math.round(performance.now() - this.started);
     if (localStorage.getItem('nearby.roam.onboarded') !== '1') this.onboarding(true);
-    this.timers.push(window.setInterval(() => void this.loadSpots(true), 15000));
+    this.timers.push(window.setInterval(() => void this.loadSpots(), 15000));
+    this.timers.push(window.setInterval(() => { const [x, z] = this.position(); this.crowd?.populate(x, z, this.spots); this.manageParked(); this.manageProps(); }, 2000));
     const loop = (now: number) => {
       if (this.disposed) return;
       this.raf = requestAnimationFrame(loop);
@@ -145,6 +207,9 @@ class Roam {
     cancelAnimationFrame(this.raf);
     this.timers.forEach(clearInterval);
     this.audio?.session.leave();
+    this.crowd?.dispose();
+    this.human?.body.dispose();
+    this.stream?.dispose();
     removeEventListener('keydown', this.onKey, true);
     removeEventListener('keyup', this.onKey, true);
     removeEventListener('resize', this.onResize);
@@ -182,6 +247,8 @@ class Roam {
       <div class="roam-street"><span></span></div>
       <div class="roam-dest" hidden><i></i><span class="roam-dest-text"></span><button type="button" data-act="jump">Jump there</button><button type="button" data-act="clear" aria-label="Clear route">×</button></div>
       <div class="roam-toast" role="status"></div>
+      <div class="roam-loading-hint" hidden>Loading area…</div>
+      <button type="button" class="roam-enter" hidden></button>
       <div class="roam-mini"><canvas width="200" height="200" aria-label="Mini-map: tap to set a route"></canvas><button type="button" class="roam-mini-big">Map</button></div>
       <div class="roam-speed"><b>0</b><small>km/h</small><i><s></s></i></div>
       <aside class="roam-places" hidden><header><b>Places nearby</b><button type="button" aria-label="Close">×</button></header><ol></ol></aside>
@@ -193,10 +260,12 @@ class Roam {
           <button type="button" data-touch="up" class="drone-only">▲</button>
           <button type="button" data-touch="down" class="drone-only">▼</button>
           <button type="button" data-touch="drift" class="car-only">Drift</button>
+          <button type="button" data-touch="run" class="walk-only" aria-pressed="false">Run</button>
+          <button type="button" data-touch="wave" class="walk-only">Wave</button>
           <button type="button" data-touch="reset">Reset</button>
         </div>
       </div>
-      <div class="roam-loading"><b>Building your neighbourhood…</b><p>Reading streets and buildings from the map</p></div>
+      <div class="roam-loading"><b>Building your neighbourhood…</b><p>Reading streets and buildings from the map</p><i class="roam-progress"><s></s></i></div>
       <div class="roam-onboard" hidden></div>`;
     document.body.append(this.root);
     const q = <T extends HTMLElement>(s: string) => this.root.querySelector(s) as T;
@@ -208,6 +277,7 @@ class Roam {
     q('.roam-bigmap button').onclick = () => this.toggleBigMap(false);
     q('.roam-dest [data-act=clear]').onclick = () => this.clearRoute();
     q('.roam-dest [data-act=jump]').onclick = () => { if (this.route) this.jumpTo(this.route.target); };
+    q('.roam-enter').onclick = () => this.useCar();
     this.root.querySelectorAll<HTMLButtonElement>('[data-mode]').forEach(b => { b.onclick = () => this.setMode(b.dataset.mode as Mode); });
     this.minimap = q('.roam-mini canvas');
     this.minimap.onclick = e => this.onMapClick(this.minimap, e, false);
@@ -216,132 +286,107 @@ class Roam {
     addEventListener('keyup', this.onKey, true);
     addEventListener('resize', this.onResize);
     this.mountTouch();
+    this.mountLook();
   }
 
-  private async loadWorld() {
+  private progress(value: number, text?: string) {
+    const bar = this.root.querySelector<HTMLElement>('.roam-progress s');
+    if (bar) bar.style.width = Math.round(value * 100) + '%';
+    if (text) { const p = this.root.querySelector('.roam-loading p'); if (p) p.textContent = text; }
+  }
+
+  private async loadFirstArea() {
     const map = this.options.map, place = this.options.place;
     const center = place ? { lng: place.lng, lat: place.lat } : map.getCenter();
     this.driveLeft = LEFT_HAND.test(place?.country ?? '');
     this.savedCamera = { center: map.getCenter(), zoom: map.getZoom(), bearing: map.getBearing(), pitch: map.getPitch() };
-    // Make sure the vector tiles around the area are loaded (z14 holds buildings).
+    this.progress(0.15);
     map.jumpTo({ center: [center.lng, center.lat], zoom: 14.2, bearing: 0, pitch: 0 });
     await Promise.race([new Promise(resolve => map.once('idle', resolve)), new Promise(resolve => setTimeout(resolve, 9000))]);
+    this.progress(0.55, 'Laying out the streets');
     this.frame = new Frame(center.lng, center.lat);
-    this.world = extractWorld(map, this.frame, RADIUS);
-    if (!this.world.roads.some(r => r.drivable)) throw new Error('No roads');
-    this.graph = new RoadGraph(this.world.roads);
+    this.stream = new WorldStream(map, this.frame, this.scene, this.q);
+    this.stream.readAll();
+    if (!this.stream.graph.edges.length) this.stream.update(0, 0, 0, -1);
+    if (!this.stream.graph.edges.length) throw new Error('No roads');
   }
 
-  // ---------------------------------------------------------------- scene
-  private buildScene() {
+  // ---------------------------------------------------------------- scene and physics
+  private setupScene() {
     const canvas = this.root.querySelector<HTMLCanvasElement>('.roam-canvas')!;
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: !this.touch, powerPreference: 'high-performance' });
-    this.renderer.setPixelRatio(Math.min(devicePixelRatio, this.touch ? 1.5 : 1.75));
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: this.q.antialias, powerPreference: 'high-performance' });
     this.renderer.setSize(innerWidth, innerHeight, false);
+    this.dynres = new DynamicResolution(this.renderer, this.q.dprCap);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    // Haze in the atlas charcoal hides chunks building in the distance.
     this.scene.background = new THREE.Color(COLORS.sky);
-    this.scene.fog = new THREE.Fog(COLORS.sky, 140, 720);
+    this.scene.fog = new THREE.Fog(COLORS.sky, this.q.fogFar * 0.3, this.q.fogFar);
+    this.camera.far = this.q.fogFar + 60;
+    this.camera.updateProjectionMatrix();
     this.scene.add(new THREE.HemisphereLight(0xc9d3e6, 0x202326, 1.45));
     const sun = new THREE.DirectionalLight(0xffe2bd, 1.1); sun.position.set(-300, 420, 200); this.scene.add(sun);
-
-    this.scene.add(buildGround(RADIUS), buildAreas(this.world.areas), buildRoads(this.world.roads));
-    const { mesh, segments } = buildBuildings(this.world.buildings);
-    this.scene.add(mesh);
-    this.segments = segments;
-    for (let i = 0; i < segments.length; i += 4) {
-      const ax = segments[i], az = segments[i + 1], bx = segments[i + 2], bz = segments[i + 3];
-      const steps = Math.max(1, Math.ceil(Math.hypot(bx - ax, bz - az) / 8));
-      const cells = new Set<number>();
-      for (let s = 0; s <= steps; s++) cells.add(this.cellKey(ax + (bx - ax) * s / steps, az + (bz - az) * s / steps, 16));
-      for (const c of cells) (this.segGrid.get(c) ?? this.segGrid.set(c, []).get(c)!).push(i);
-    }
-    for (const line of this.world.names) for (let i = 1; i < line.pts.length; i++) {
-      const [ax, az] = line.pts[i - 1], [bx, bz] = line.pts[i];
-      const k = this.names.push({ name: line.name, ax, az, bx, bz }) - 1;
-      for (let s = 0; s <= 4; s++) {
-        const c = this.cellKey(ax + (bx - ax) * s / 4, az + (bz - az) * s / 4, 30);
-        (this.nameGrid.get(c) ?? this.nameGrid.set(c, []).get(c)!).push(k);
-      }
-    }
-
-    this.scene.add(this.car.mesh, this.walker.mesh, this.sparks);
-    this.walker.mesh.visible = false;
-    const count = this.touch ? 14 : 30;
-    this.trafficMesh = makeTraffic(count);
+    this.ground = new THREE.Mesh(new THREE.PlaneGeometry(this.q.fogFar * 3, this.q.fogFar * 3), new THREE.MeshLambertMaterial({ color: COLORS.ground }));
+    this.ground.rotation.x = -Math.PI / 2;
+    this.scene.add(this.ground, this.sparks);
+    this.trafficMesh = makeTraffic(this.q.traffic);
     this.scene.add(this.trafficMesh.body, this.trafficMesh.cabin, this.trafficMesh.lights);
-    const palette = [0xd46b59, 0x82abb9, 0xc8c6ba, 0x8994b7, 0x6f8f72, 0xb88a5e, 0x9b6f8e, 0xe0e0d8];
-    for (let i = 0; i < count; i++) {
-      const color = new THREE.Color(palette[i % palette.length]);
-      this.trafficMesh.body.setColorAt(i, color);
-      this.traffic.push({ edge: 0, from: 0, t: 0, speed: 0, cruise: 10, color, x: 0, z: 0, h: 0, shown: 0, bumped: 0, vx: 0, vz: 0, spin: 0 });
+    for (let i = 0; i < this.q.traffic; i++) {
+      const color = CAR_COLORS[i % CAR_COLORS.length];
+      this.trafficMesh.body.setColorAt(i, new THREE.Color(color));
+      this.traffic.push({ edge: 0, from: 0, t: 0, speed: 0, cruise: 10, color, x: 1e6, z: 1e6, h: 0, shown: 0, crashed: 0, still: 0, sinking: 0 });
     }
-    this.renderRoadsImage();
-    (window as unknown as { __roamStats: unknown }).__roamStats = this.stats = {
-      buildings: this.world.buildings.length, roads: this.world.roads.length, nodes: this.graph.nodes.length, traffic: count, fps: 0,
-      hits: 0, trafficHits: 0, volume: -1, distance: -1, mode: 'car', speed: 0,
+    this.stats = {
+      tier: this.q.tier, tierReason: this.q.reason, fps: 0, dpr: 0, mode: 'car', speed: 0, hits: 0, trafficHits: 0, crashes: 0,
+      volume: -1, distance: -1, walker: '-', pedestrians: this.q.pedestrians, pedsVisible: 0, heapMB: 0, chunks: 0, built: 0,
+      buildMs: 0, maxBuildMs: 0, bodies: 0, vehicles: 0, splash: 0, water: -1, firstPlayableMs: 0,
     };
-    // Test hooks, only with ?roamdebug in the URL.
-    if (new URLSearchParams(location.search).has('roamdebug')) (window as unknown as { __roam: unknown }).__roam = {
-      aimAtBuilding: () => this.debugAimAtBuilding(), aimAtTraffic: () => this.debugAimAtTraffic(),
-      teleport: (x: number, z: number) => { this.drone.x = this.walker.x = x; this.drone.z = this.walker.z = z; this.resetCar(x, z); this.snapCamera(); },
-      spots: () => this.spots.map(sp => ({ id: sp.id, name: sp.name, kind: sp.kind, x: sp.x, z: sp.z, live: sp.live })),
-      position: () => this.position(),
-    };
+    (window as unknown as { __roamStats: unknown }).__roamStats = this.stats;
+    if (new URLSearchParams(location.search).has('roamdebug')) (window as unknown as { __roam: unknown }).__roam = this.debugHooks();
   }
 
-  private stats: Record<string, number | string> = {};
-
-  private debugAimAtBuilding() {
-    const s = this.segments;
-    let best = -1, bd = Infinity;
-    for (let i = 0; i < s.length; i += 4) {
-      const len = Math.hypot(s[i + 2] - s[i], s[i + 3] - s[i + 1]);
-      if (len < 8) continue;
-      const mx = (s[i] + s[i + 2]) / 2, mz = (s[i + 1] + s[i + 3]) / 2, d = Math.hypot(mx - this.car.x, mz - this.car.z);
-      if (d < bd) { bd = d; best = i; }
-    }
-    if (best < 0) return false;
-    const mx = (s[best] + s[best + 2]) / 2, mz = (s[best + 1] + s[best + 3]) / 2;
-    let nx = -(s[best + 3] - s[best + 1]), nz = s[best + 2] - s[best];
-    const l = Math.hypot(nx, nz); nx /= l; nz /= l;
-    for (const sign of [1, -1]) {
-      const x = mx + nx * sign * 16, z = mz + nz * sign * 16;
-      if (this.pushOut(x, z, 1.2)) continue;
-      Object.assign(this.car, { x, z, h: Math.atan2(mx - x, -(mz - z)), vx: 0, vz: 0, steer: 0 });
-      this.snapCamera();
-      return true;
-    }
-    return false;
+  private setupPhysics() {
+    this.world.broadphase = new CANNON.SAPBroadphase(this.world);
+    this.world.allowSleep = true;
+    this.world.defaultContactMaterial.friction = 0.3;     // folio-2019 floor/wheel friction
+    this.world.defaultContactMaterial.restitution = 0.2;  // folio-2019 default restitution
+    const ground = new CANNON.Body({ mass: 0 });
+    ground.addShape(new CANNON.Plane());
+    ground.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
+    this.world.addBody(ground);
   }
 
-  private debugAimAtTraffic() {
-    const t = this.traffic[0];
-    t.bumped = 0; t.cruise = 0; t.speed = 0;
-    this.trafficPose(t);
-    const fx = Math.sin(t.h), fz = -Math.cos(t.h);
-    Object.assign(this.car, { x: t.x - fx * 18, z: t.z - fz * 18, h: t.h, vx: 0, vz: 0, steer: 0 });
-    this.snapCamera();
-    return true;
+  private newVehicle(color: number, x: number, z: number, heading: number) {
+    const v = new Vehicle(this.world, makeCar(color), color, 0.9 + (CAR_COLORS.indexOf(color) % 3) * 0.08);
+    v.place(x, z, heading);
+    this.scene.add(v.mesh);
+    this.vehicles.push(v);
+    return v;
   }
 
-  private cellKey(x: number, z: number, size: number) { return (Math.floor(x / size) + 4096) * 8192 + (Math.floor(z / size) + 4096); }
+  private removeVehicle(v: Vehicle) {
+    v.remove();
+    this.scene.remove(v.mesh);
+    v.mesh.traverse(o => { const m = o as THREE.Mesh; m.geometry?.dispose(); (m.material as THREE.Material | undefined)?.dispose?.(); });
+    this.vehicles.splice(this.vehicles.indexOf(v), 1);
+  }
 
   // ---------------------------------------------------------------- places
-  private async loadSpots(refresh = false) {
+  private async loadSpots() {
+    const [px, pz] = this.position();
+    this.spotsAt = [px, pz];
     const keep = new Map(this.spots.map(s => [s.id, s]));
     const next: Spot[] = [];
+    const R = Math.max(1200, this.q.viewRadius * 2);
     const add = (s: Spot) => {
-      if (Math.hypot(s.x, s.z) > RADIUS - 10) return;
+      if (Math.hypot(s.x - px, s.z - pz) > R) return;
       const old = keep.get(s.id);
       if (old) { Object.assign(old, { live: s.live, listening: s.listening, name: s.name, detail: s.detail }); next.push(old); }
       else next.push(s);
     };
     const place = this.options.place;
-    // Things people created on the map (rooms, events, live audio, communities) come first:
-    // they carry their real kind and live counts. The app also lists them as activities.
     const created = new Set<string>();
     try {
-      const [w, n] = this.frame.toLngLat(-RADIUS, -RADIUS), [e, s] = this.frame.toLngLat(RADIUS, RADIUS);
+      const [w, n] = this.frame.toLngLat(px - R, pz - R), [e, s] = this.frame.toLngLat(px + R, pz + R);
       const res = await fetch(`/api/places?bbox=${w.toFixed(5)},${s.toFixed(5)},${e.toFixed(5)},${n.toFixed(5)}`);
       const data = await res.json() as { items?: { id: string; kind: string; title: string; lat: number; lng: number; live?: number; listening?: number; place?: string }[] };
       for (const item of data.items ?? []) {
@@ -358,10 +403,9 @@ class Roam {
       const [x, z] = this.frame.toLocal(at[0], at[1]);
       add({ id: 'a:' + a.id, name: a.title, kind: 'activity', x, z, color: KIND_COLOR.activity, detail: a.time });
     }
-    for (const l of this.world.landmarks) add({ id: 'l:' + l.name, name: l.name, kind: l.kind === 'park' ? 'park' : 'landmark', x: l.x, z: l.z, color: KIND_COLOR[l.kind === 'park' ? 'park' : 'landmark'] });
-    // Remove what disappeared.
+    for (const l of this.stream.landmarks) add({ id: 'l:' + l.name, name: l.name, kind: l.kind === 'park' ? 'park' : 'landmark', x: l.x, z: l.z, color: KIND_COLOR[l.kind === 'park' ? 'park' : 'landmark'] });
     for (const old of this.spots) if (!next.includes(old)) { old.label?.remove(); if (old.beacon) this.scene.remove(old.beacon.group); }
-    this.spots = next;
+    this.spots = next.slice(0, 80);
     for (const s of this.spots) {
       if (!s.beacon && s.kind !== 'landmark') {
         s.beacon = makeBeacon(s.color, s.kind === 'audio' ? 90 : s.kind === 'park' ? 30 : 60);
@@ -371,15 +415,15 @@ class Roam {
       if (!s.label) {
         const label = document.createElement('button');
         label.type = 'button';
+        label.className = 'roam-label kind-' + s.kind;
+        label.onclick = () => this.setRoute(s);
         s.label = label;
-        s.label.className = 'roam-label kind-' + s.kind;
-        s.label.onclick = () => this.setRoute(s);
-        this.root.querySelector('.roam-labels')!.append(s.label);
+        this.root.querySelector('.roam-labels')!.append(label);
       }
       const live = s.kind === 'audio' ? `<em>${s.live ?? 0} live${s.listening ? ` · ${s.listening} listening` : ''}</em>` : '';
       s.label.innerHTML = `<span>${esc(KIND_LABEL[s.kind] ?? s.kind)}</span><b>${esc(s.name)}</b>${live}<small></small>`;
     }
-    if (refresh) this.renderPlaces();
+    this.renderPlaces();
   }
 
   private togglePlaces(open?: boolean) {
@@ -407,9 +451,16 @@ class Roam {
     // Start near the most interesting spot: the activity or venue closest to the area centre.
     const pick = [...this.spots].filter(s => s.kind !== 'landmark').sort((a, b) => Math.hypot(a.x, a.z) - Math.hypot(b.x, b.z))[0];
     const target: XZ = pick && Math.hypot(pick.x, pick.z) < 700 ? [pick.x, pick.z] : [0, 0];
-    const start = this.graph.spawnNear(target[0], target[1]) ?? { point: target, heading: 0 };
-    Object.assign(this.car, { x: start.point[0], z: start.point[1], h: start.heading, vx: 0, vz: 0, steer: 0 });
+    const start = this.stream.graph.spawnNear(target[0], target[1]) ?? { point: target, heading: 0 };
+    this.stream.buildAround(start.point[0], start.point[1]);
+    this.driving = this.newVehicle(COLORS.accent, start.point[0], start.point[1], start.heading);
+    this.driving.driver = 'player';
+    this.walker = { x: start.point[0], z: start.point[1], h: start.heading };
+    this.graphVersion = this.stream.graphVersion;
     this.placeTraffic(true);
+    this.crowd?.populate(start.point[0], start.point[1], this.spots, true);
+    this.manageParked();
+    this.manageProps();
     this.snapCamera();
   }
 
@@ -417,44 +468,100 @@ class Roam {
     if (mode === this.mode) return;
     const [x, z] = this.position();
     if (mode === 'car') {
-      // Get back in if the car is close, otherwise bring it to the nearest road.
-      if (Math.hypot(this.car.x - x, this.car.z - z) > 10) this.resetCar(x, z);
-    } else if (mode === 'walk') {
-      const h = this.mode === 'car' ? this.car.h : this.drone.h;
-      if (this.mode === 'car') { this.walker.x = this.car.x + Math.cos(this.car.h) * 2.6; this.walker.z = this.car.z + Math.sin(this.car.h) * 2.6; }
-      else { const hit = this.graph.nearest(x, z, 200); [this.walker.x, this.walker.z] = hit ? hit.point : [x, z]; }
-      this.walker.h = h;
-    } else {
-      this.drone.x = x; this.drone.z = z; this.drone.h = this.mode === 'car' ? this.car.h : this.walker.h; this.drone.alt = 70;
+      // Back into the nearest car you own, or the car you were last in comes to you.
+      const mine = this.driving ?? (this.lastCar && this.vehicles.includes(this.lastCar) ? this.lastCar : undefined);
+      if (this.mode === 'walk' && this.nearCar) { this.useCar(); return; }
+      if (!mine) { const s = this.stream.graph.spawnNear(x, z); if (!s) return; this.enter(this.newVehicle(COLORS.accent, s.point[0], s.point[1], s.heading)); return; }
+      if (Math.hypot(mine.x - x, mine.z - z) > 10) { const s = this.stream.graph.spawnNear(x, z); if (s) mine.place(s.point[0], s.point[1], s.heading); }
+      this.enter(mine);
+      return;
     }
+    if (this.mode === 'car' && this.driving) this.leave(false);
+    if (mode === 'walk') {
+      if (this.mode === 'drone') { const hit = this.stream.graph.nearest(x, z, 200); [this.walker.x, this.walker.z] = hit ? hit.point : [x, z]; this.walker.h = this.drone.h; }
+      this.human?.place(this.walker.x, this.walker.z, this.walker.h);
+      this.camYaw.reset(this.walker.h); this.dragYaw = 0;
+    } else {
+      this.drone.x = x; this.drone.z = z; this.drone.h = this.heading(); this.drone.alt = 70;
+    }
+    this.setModeClass(mode);
+  }
+
+  private setModeClass(mode: Mode) {
     this.mode = mode;
-    this.walker.mesh.visible = mode === 'walk';
+    if (this.human) this.human.object.visible = mode === 'walk';
     this.root.classList.toggle('mode-drone', mode === 'drone');
     this.root.classList.toggle('mode-walk', mode === 'walk');
     this.root.querySelectorAll<HTMLButtonElement>('[data-mode]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === mode)));
-    this.toast(mode === 'car' ? 'Driving' : mode === 'walk' ? 'On foot: walk anywhere, even through parks' : 'Drone: fly over the neighbourhood');
-    this.snapCamera();
+  }
+
+  /** Get into a car (Sketchbook flow: to the door, door gesture, take the seat). */
+  private enter(v: Vehicle) {
+    for (const o of this.vehicles) if (o !== v && o.driver === 'player') { o.driver = 'none'; o.park(); }
+    this.driving = v; v.driver = 'player'; v.body.wakeUp();
+    this.human?.body.gestureOnce(this.human.body.interact);
+    this.seat = 0.45;
+    this.setModeClass('car');
+  }
+
+  /** Step out beside the driver's door; the car stays parked as a physics body. */
+  private leave(toWalk = true) {
+    const v = this.driving;
+    if (!v) return;
+    v.driver = 'none'; v.park(); this.lastCar = v;
+    const h = v.heading, side = this.driveLeft ? 1 : -1;           // door on the kerb side away from traffic
+    let x = v.x + Math.cos(h) * 1.9 * side, z = v.z + Math.sin(h) * 1.9 * side;
+    const hit = this.stream.pushOut(x, z, 0.5, this.tmp.hit);
+    if (hit) { x += hit.dx; z += hit.dz; }
+    this.walker = { x, z, h };
+    this.driving = undefined;
+    if (toWalk) {
+      this.human?.place(x, z, h);
+      this.human?.body.gestureOnce(this.human.body.interact);
+      this.camYaw.reset(h);
+      this.setModeClass('walk');
+    }
+  }
+
+  /** On foot near a car: take it. In a car: get out. */
+  private useCar() {
+    if (this.mode === 'car') { this.leave(); return; }
+    if (this.mode !== 'walk' || !this.nearCar) return;
+    const target = this.nearCar;
+    if (target instanceof Vehicle) { this.enter(target); this.toast('In the car'); return; }
+    // A traffic car: the driver gets out and runs off (cartoon), and you drive it.
+    const t = target;
+    const v = this.newVehicle(t.color, t.x, t.z, t.h);
+    const side = this.driveLeft ? -1 : 1;
+    this.crowd?.flee(t.x + Math.cos(t.h) * 2 * side, t.z + Math.sin(t.h) * 2 * side, this.walker.x, this.walker.z);
+    this.retireTraffic(t);
+    this.enter(v);
+    this.toast('Car taken');
+    this.stats.taken = Number(this.stats.taken ?? 0) + 1;
   }
 
   private position(): XZ {
-    return this.mode === 'car' ? [this.car.x, this.car.z] : this.mode === 'walk' ? [this.walker.x, this.walker.z] : [this.drone.x, this.drone.z];
+    if (this.mode === 'car' && this.driving) return [this.driving.x, this.driving.z];
+    return this.mode === 'drone' ? [this.drone.x, this.drone.z] : [this.walker.x, this.walker.z];
   }
-  private heading() { return this.mode === 'car' ? this.car.h : this.mode === 'walk' ? this.walker.h : this.drone.h; }
+  private heading() { return this.mode === 'car' && this.driving ? this.driving.heading : this.mode === 'walk' ? this.walker.h : this.drone.h; }
 
-  private resetCar(x = this.car.x, z = this.car.z) {
-    const spot = this.graph.spawnNear(x, z);
-    if (!spot) return;
-    Object.assign(this.car, { x: spot.point[0], z: spot.point[1], h: spot.heading, vx: 0, vz: 0, steer: 0 });
+  private resetCar() {
+    const v = this.driving;
+    if (!v) return;
+    const s = this.stream.graph.spawnNear(v.x, v.z);
+    if (s) v.place(s.point[0], s.point[1], s.heading);
     this.stuck = 0;
   }
 
   /** Fast travel: appear on the road next to a place. */
   private jumpTo(target: { x: number; z: number; name: string }) {
     this.flash(0.9);
-    const road = this.graph.nearest(target.x, target.z, 150);
+    const road = this.stream.graph.nearest(target.x, target.z, 150);
     const [x, z] = road ? road.point : [target.x, target.z];
-    if (this.mode === 'car') this.resetCar(x, z);
-    else if (this.mode === 'walk') { this.walker.x = x; this.walker.z = z; }
+    this.stream.buildAround(x, z);
+    if (this.mode === 'car' && this.driving) { const s = this.stream.graph.spawnNear(x, z); this.driving.place(s?.point[0] ?? x, s?.point[1] ?? z, s?.heading ?? 0); }
+    else if (this.mode === 'walk') { this.walker.x = x; this.walker.z = z; this.human?.place(x, z, this.walker.h); }
     else { this.drone.x = target.x; this.drone.z = target.z; }
     this.clearRoute();
     this.snapCamera();
@@ -464,8 +571,8 @@ class Roam {
   // ---------------------------------------------------------------- GPS route
   private setRoute(target: Spot | { name: string; x: number; z: number }) {
     this.clearRoute();
-    const points = this.graph.route(this.position(), [target.x, target.z]);
-    if (!points || points.length < 2) { this.toast('No road route there. Use “Jump there”.'); this.showDest(target, null); return; }
+    const points = this.stream.graph.route(this.position(), [target.x, target.z]);
+    if (!points || points.length < 2) { this.toast('No road route there yet. Use “Jump there”.'); this.showDest(target, null); return; }
     points.push([target.x, target.z]);
     const mesh = makeRoute(points);
     this.scene.add(mesh);
@@ -491,7 +598,7 @@ class Roam {
   private routeRemaining() {
     if (!this.route) return 0;
     const [px, pz] = this.position(), pts = this.route.points;
-    let best = Infinity, bestI = 0, bestT = 0;
+    let best = Infinity, bestI = 1, bestT = 0;
     for (let i = 1; i < pts.length; i++) {
       const [ax, az] = pts[i - 1], [bx, bz] = pts[i];
       const vx = bx - ax, vz = bz - az, l2 = vx * vx + vz * vz || 1;
@@ -501,7 +608,6 @@ class Roam {
     }
     let left = Math.hypot(pts[bestI][0] - pts[bestI - 1][0], pts[bestI][1] - pts[bestI - 1][1]) * (1 - bestT);
     for (let i = bestI + 1; i < pts.length; i++) left += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
-    // Off the route for a while: plan again from here.
     if (best > 40 && performance.now() - this.route.checked > 1500) { const target = this.route.target; this.route.checked = performance.now(); setTimeout(() => this.setRoute(target)); }
     return left;
   }
@@ -516,7 +622,7 @@ class Roam {
   private onKey = (e: KeyboardEvent) => {
     if (this.disposed || (e.target as HTMLElement)?.closest?.('input, textarea, select')) return;
     const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
-    const handled = ['w', 'a', 's', 'd', 'q', 'e', ' ', 'Shift', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'r', 'Escape', 'm', 'g', 'v', '1', '2', '3', 'c'].includes(k);
+    const handled = ['w', 'a', 's', 'd', 'q', 'e', 'f', ' ', 'Shift', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'r', 'Escape', 'm', 'g', 'v', '1', '2', '3', 'c', 'h'].includes(k);
     if (!handled) return;
     e.preventDefault(); e.stopPropagation();
     if (e.type === 'keyup') { this.keys.delete(k); return; }
@@ -528,6 +634,10 @@ class Roam {
       const big = this.root.querySelector<HTMLElement>('.roam-bigmap')!, places = this.root.querySelector<HTMLElement>('.roam-places')!;
       if (!big.hidden) this.toggleBigMap(false); else if (!places.hidden) this.togglePlaces(false); else this.exit();
     } else if (k === 'r') { if (this.mode === 'car') { this.resetCar(); this.toast('Back on the road'); } }
+    else if (k === 'f' || (k === 'e' && this.mode !== 'drone')) {
+      if (this.mode === 'car' || this.nearCar) this.useCar(); else if (this.mode === 'walk' && k === 'f') this.human?.wave();
+    }
+    else if (k === 'h') { if (this.mode === 'walk') this.human?.wave(); }
     else if (k === 'm') this.toggleBigMap();
     else if (k === 'g') this.togglePlaces();
     else if (k === '1') this.setMode('car');
@@ -541,13 +651,14 @@ class Roam {
     let y = (k.has('w') || k.has('ArrowUp') ? 1 : 0) - (k.has('s') || k.has('ArrowDown') ? 1 : 0);
     let x = (k.has('d') || k.has('ArrowRight') ? 1 : 0) - (k.has('a') || k.has('ArrowLeft') ? 1 : 0);
     if (this.stick.x || this.stick.y) { x = this.stick.x; y = this.stick.y; }
-    return {
-      x, y,
-      drift: k.has(' ') || this.touchButtons.has('drift'),
-      up: k.has('e') || (this.mode === 'drone' && k.has(' ')) || this.touchButtons.has('up'),
-      down: k.has('q') || (this.mode === 'drone' && k.has('Shift')) || this.touchButtons.has('down'),
-      sprint: k.has('Shift'),
-    };
+    if (this.autopilot && this.mode === 'car' && this.driving) [x, y] = this.drivePilot();
+    const s = this.inputState;
+    s.x = x; s.y = y;
+    s.drift = k.has(' ') || this.touchButtons.has('drift');
+    s.up = (this.mode === 'drone' && (k.has('e') || k.has(' '))) || this.touchButtons.has('up');
+    s.down = (this.mode === 'drone' && (k.has('q') || k.has('Shift'))) || this.touchButtons.has('down');
+    s.sprint = k.has('Shift') !== this.running;
+    return s;
   }
 
   private mountTouch() {
@@ -566,12 +677,32 @@ class Roam {
     stick.addEventListener('pointerup', end); stick.addEventListener('pointercancel', end);
     this.root.querySelectorAll<HTMLButtonElement>('[data-touch]').forEach(b => {
       const name = b.dataset.touch!;
-      b.addEventListener('pointerdown', e => { e.preventDefault(); if (name === 'reset') { this.mode === 'car' ? this.resetCar() : this.jumpTo({ name: 'the road', ...this.nearestRoadXZ() }); } else this.touchButtons.add(name); });
+      b.addEventListener('pointerdown', e => {
+        e.preventDefault();
+        if (name === 'reset') { if (this.mode === 'car') this.resetCar(); else this.jumpTo({ name: 'the road', ...this.nearestRoadXZ() }); }
+        else if (name === 'run') { this.running = !this.running; b.setAttribute('aria-pressed', String(this.running)); }
+        else if (name === 'wave') this.human?.wave();
+        else this.touchButtons.add(name);
+      });
       for (const t of ['pointerup', 'pointerleave', 'pointercancel']) b.addEventListener(t, () => this.touchButtons.delete(name));
     });
   }
 
-  private nearestRoadXZ() { const [x, z] = this.position(); const hit = this.graph.nearest(x, z, 500); return { x: hit ? hit.point[0] : x, z: hit ? hit.point[1] : z }; }
+  /** Drag on the world to turn the camera when on foot or flying. */
+  private mountLook() {
+    const canvas = this.root.querySelector<HTMLCanvasElement>('.roam-canvas')!;
+    let id = -1, lastX = 0;
+    canvas.addEventListener('pointerdown', e => { if (this.mode === 'car') return; id = e.pointerId; lastX = e.clientX; canvas.setPointerCapture(id); });
+    canvas.addEventListener('pointermove', e => {
+      if (e.pointerId !== id) return;
+      const d = (e.clientX - lastX) * 0.006; lastX = e.clientX;
+      if (this.mode === 'drone') this.drone.h += d; else { this.dragYaw += d; this.dragUntil = performance.now() + 1800; }
+    });
+    const end = (e: PointerEvent) => { if (e.pointerId === id) id = -1; };
+    canvas.addEventListener('pointerup', end); canvas.addEventListener('pointercancel', end);
+  }
+
+  private nearestRoadXZ() { const [x, z] = this.position(); const hit = this.stream.graph.nearest(x, z, 500); return { x: hit ? hit.point[0] : x, z: hit ? hit.point[1] : z }; }
 
   private onResize = () => {
     this.camera.aspect = innerWidth / innerHeight;
@@ -587,15 +718,30 @@ class Roam {
     while (this.fpsFrames.length && now - this.fpsFrames[0] > 1000) this.fpsFrames.shift();
     const input = this.input();
     const paused = !this.root.querySelector<HTMLElement>('.roam-onboard')!.hidden;
+    const [px, pz] = this.position(), h = this.heading();
+    this.stream.update(px, pz, Math.sin(h), -Math.cos(h));
+    if (this.stream.graphVersion !== this.graphVersion) this.onGraphChanged();
     if (!paused) {
-      if (this.mode === 'car') { const sub = 6; for (let i = 0; i < sub; i++) this.stepCar(dt / sub, input); this.checkStuck(dt, input); }
-      else if (this.mode === 'walk') this.stepWalk(dt, input);
-      else this.stepDrone(dt, input);
+      if (this.seat > 0) this.seat -= dt;
+      if (this.mode === 'car' && this.driving) this.driving.drive(this.seat > 0 ? 0 : input.y, input.x, input.drift, dt);
+      else if (this.mode === 'walk') this.stepHuman(dt, input);
+      else if (this.mode === 'drone') this.stepDrone(dt, input);
       this.stepTraffic(dt);
+      // Fixed-step physics (60 Hz), at most three steps per frame.
+      this.physAcc = Math.min(this.physAcc + dt, STEP * 3);
+      while (this.physAcc >= STEP) { this.world.step(STEP); this.afterStep(STEP); this.physAcc -= STEP; }
+      this.flushCrashes();
+      if (this.mode === 'car') this.checkStuck(dt, input);
+      if (this.driving && this.mode === 'car') this.crowd?.dodge(this.driving.x, this.driving.z, this.driving.speed);
     }
+    for (const v of this.vehicles) v.sync(dt);
+    for (const p of this.props) { p.mesh.position.set(p.body.position.x, p.body.position.y, p.body.position.z); p.mesh.quaternion.set(p.body.quaternion.x, p.body.quaternion.y, p.body.quaternion.z, p.body.quaternion.w); }
+    this.drawTraffic();
     this.stepSparks(dt);
-    this.updateCarMesh(dt);
     this.updateCamera(dt);
+    this.ground.position.set(this.camLook.x, 0, this.camLook.z);
+    if (this.crowd) this.crowd.update(paused ? 0 : dt, this.camLook.x, this.camLook.z);
+    this.dynres?.update(dt);
     this.beaconTime += dt;
     for (const s of this.spots) if (s.beacon) {
       s.beacon.material.uniforms.time.value = this.beaconTime;
@@ -610,80 +756,75 @@ class Roam {
       this.updateHud();
       this.updateListening();
       this.drawMinimap();
-      this.stats.fps = this.fpsFrames.length;
-      this.stats.mode = this.mode;
-      this.stats.speed = Math.round(Math.hypot(this.car.vx, this.car.vz) * 3.6);
-    } else if (this.route || this.mode !== 'drone') this.drawMinimap();
+      this.findNearCar();
+      if (Math.hypot(px - this.spotsAt[0], pz - this.spotsAt[1]) > 700) void this.loadSpots();
+      this.updateStats();
+    } else if (this.fpsFrames.length % this.q.minimapEvery === 0) this.drawMinimap();
   }
-  private lastNow = 0;
 
-  /** Arcade car: engine, brakes, speed-sensitive steering, grip that the handbrake breaks. */
-  private stepCar(dt: number, input: ReturnType<Roam['input']>) {
-    const c = this.car;
-    const fx = Math.sin(c.h), fz = -Math.cos(c.h), rx = Math.cos(c.h), rz = Math.sin(c.h);
-    let vf = c.vx * fx + c.vz * fz, vr = c.vx * rx + c.vz * rz;
-    const maxSpeed = 36;
-    if (input.y > 0) vf += (vf < 0 ? 26 : 13 * (1 - Math.max(0, vf) / maxSpeed)) * input.y * dt;
-    else if (input.y < 0) vf += (vf > 0.5 ? -24 : -7) * -input.y * dt;
-    else vf -= Math.sign(vf) * Math.min(Math.abs(vf), (1.6 + Math.abs(vf) * 0.04) * dt);
-    vf = clamp(vf, -9, maxSpeed);
-    if (input.drift) vf -= Math.sign(vf) * Math.min(Math.abs(vf), 5 * dt);
-    vr *= Math.exp(-(input.drift ? 1.1 : 7.5) * dt);
-    c.steer += (input.x - c.steer) * Math.min(1, dt * 7);
-    const angle = c.steer * 0.62 / (1 + Math.abs(vf) * 0.05);
-    c.vx = fx * vf + rx * vr; c.vz = fz * vf + rz * vr;
-    c.h += angle * vf / 2.6 * (input.drift ? 1.45 : 1) * dt;
-    c.x += c.vx * dt; c.z += c.vz * dt;
-    // Buildings: two circles along the body, pushed out of walls; velocity slides along.
-    for (const off of [1.25, -1.25]) {
-      const cx = c.x + Math.sin(c.h) * off, cz = c.z - Math.cos(c.h) * off;
-      const hit = this.pushOut(cx, cz, 1.0);
+  private updateStats() {
+    const s = this.stats;
+    s.fps = this.fpsFrames.length;
+    s.mode = this.mode;
+    s.speed = Math.round((this.driving?.speed ?? 0) * 3.6);
+    s.dpr = Number((this.dynres?.ratio ?? 0).toFixed(2));
+    s.pedsVisible = this.crowd?.visibleCount ?? 0;
+    s.walker = this.human?.state ?? '-';
+    s.chunks = this.stream.stats.chunks; s.built = this.stream.stats.built;
+    s.buildMs = Number(this.stream.stats.lastBuildMs.toFixed(1)); s.maxBuildMs = Number(this.stream.stats.maxBuildMs.toFixed(1));
+    s.bodies = this.world.bodies.length; s.vehicles = this.vehicles.length;
+    const mem = (performance as Performance & { memory?: { usedJSHeapSize: number } }).memory;
+    if (mem) s.heapMB = Math.round(mem.usedJSHeapSize / 1048576);
+  }
+
+  /** After each physics step: buildings, water and recovery for every free body. */
+  private afterStep(dt: number) {
+    for (const v of this.vehicles) this.collideBody(v.body, 1.0, 1.4, v);
+    for (const t of this.traffic) if (t.body && t.crashed > 0) this.collideBody(t.body, 1.0, 1.4);
+    for (const v of this.vehicles) this.waterVehicle(v, dt);
+  }
+
+  /** Building walls as simple 2D segments (no mesh colliders): two circles along the car. */
+  private collideBody(body: CANNON.Body, r: number, off: number, v?: Vehicle) {
+    const q = body.quaternion;
+    const fx = -2 * (q.x * q.z + q.w * q.y), fz = -(1 - 2 * (q.x * q.x + q.y * q.y)), fl = Math.hypot(fx, fz) || 1;
+    for (const o of [off, -off]) {
+      const cx = body.position.x + fx / fl * o, cz = body.position.z + fz / fl * o;
+      const hit = this.stream.pushOut(cx, cz, r, this.tmp.hit);
       if (!hit) continue;
-      c.x += hit.dx; c.z += hit.dz;
-      const vn = c.vx * hit.nx + c.vz * hit.nz;
+      body.position.x += hit.dx; body.position.z += hit.dz;
+      const vn = body.velocity.x * hit.nx + body.velocity.z * hit.nz;
       if (vn < 0) {
-        c.vx -= hit.nx * vn * 1.15; c.vz -= hit.nz * vn * 1.15;
-        const loss = 1 - Math.min(0.3, -vn * 0.015);
-        c.vx *= loss; c.vz *= loss;
-        this.impact(-vn, cx - hit.nx, cz - hit.nz);
+        body.velocity.x -= hit.nx * vn * 1.2; body.velocity.z -= hit.nz * vn * 1.2;
+        body.velocity.x *= 0.85; body.velocity.z *= 0.85;
+        if (v === this.driving) this.impact(-vn, cx - hit.nx * r, cz - hit.nz * r);
       }
     }
-    this.keepInside(c);
   }
 
-  private keepInside(o: { x: number; z: number; vx?: number; vz?: number }) {
-    const d = Math.hypot(o.x, o.z);
-    if (d < RADIUS - 4) return;
-    const nx = -o.x / d, nz = -o.z / d;
-    o.x += nx * (d - (RADIUS - 4)); o.z += nz * (d - (RADIUS - 4));
-    if (o.vx !== undefined && o.vz !== undefined) {
-      const vn = o.vx * nx + o.vz * nz;
-      if (vn < 0) { o.vx -= nx * vn * 1.4; o.vz -= nz * vn * 1.4; }
-    }
-    if (performance.now() - this.lastEdgeToast > 4000) { this.lastEdgeToast = performance.now(); this.toast('Edge of the explorable area: turn around'); }
-  }
-  private lastEdgeToast = 0;
-
-  /** Separate a circle from building walls. Returns the push and the average wall normal. */
-  private pushOut(x: number, z: number, r: number) {
-    let dx = 0, dz = 0, hits = 0;
-    const s = this.segments;
-    const seen = new Set<number>();
-    for (const ox of [-1, 0, 1]) for (const oz of [-1, 0, 1]) {
-      for (const i of this.segGrid.get(this.cellKey(x + ox * 16, z + oz * 16, 16)) ?? []) {
-        if (seen.has(i)) continue; seen.add(i);
-        const ax = s[i], az = s[i + 1], vx = s[i + 2] - ax, vz = s[i + 3] - az;
-        const l2 = vx * vx + vz * vz || 1;
-        const t = clamp(((x + dx - ax) * vx + (z + dz - az) * vz) / l2, 0, 1);
-        const px = ax + vx * t, pz = az + vz * t;
-        const ex = x + dx - px, ez = z + dz - pz, d = Math.hypot(ex, ez);
-        if (d >= r || d < 1e-6) continue;
-        dx += ex / d * (r - d); dz += ez / d * (r - d); hits++;
+  /** Water is a no-drive zone: slow cars meet the shore as a wall, fast ones splash, sink and respawn. */
+  private waterVehicle(v: Vehicle, dt: number) {
+    if (v.sinking > 0) {
+      v.sinking += dt;
+      v.body.velocity.scale(0.9, v.body.velocity);
+      if (v.sinking > 2.6) {
+        const s = this.stream.graph.spawnNear(v.x, v.z);
+        if (v.driver === 'player' && s) { v.place(s.point[0], s.point[1], s.heading); this.toast('Back on the road'); }
+        else this.removeVehicle(v);
       }
+      return;
     }
-    if (!hits) return null;
-    const l = Math.hypot(dx, dz) || 1;
-    return { dx, dz, nx: dx / l, nz: dz / l };
+    const depth = this.stream.waterDepth(v.x, v.z);
+    if (depth < 0.4) { if (depth < 0) { v.lastDry.copy(v.body.position); } return; }
+    if (v.speed > 7) {
+      v.sinking = 0.001;
+      this.burst(v.x, 0.4, v.z, 70, true);
+      this.flash(0.35);
+      if (v.driver === 'player') { this.toast('Splash!'); this.stats.splash = Number(this.stats.splash) + 1; }
+    } else {
+      v.body.position.x = v.lastDry.x; v.body.position.z = v.lastDry.z;
+      v.body.velocity.scale(-0.25, v.body.velocity);
+    }
   }
 
   private impact(speed: number, x: number, z: number, traffic = false) {
@@ -697,23 +838,61 @@ class Roam {
   }
 
   private checkStuck(dt: number, input: ReturnType<Roam['input']>) {
-    const speed = Math.hypot(this.car.vx, this.car.vz);
-    if (input.y !== 0 && speed < 0.8 && performance.now() - this.lastHit < 600) this.stuck += dt; else this.stuck = Math.max(0, this.stuck - dt);
+    const v = this.driving;
+    if (!v) return;
+    // Forgiving: flipped or wedged cars come back to the road by themselves.
+    v.tipped = v.upright < 0.45 ? v.tipped + dt : 0;
+    if (v.tipped > 1.5) { this.resetCar(); this.toast('Back on your wheels'); return; }
+    if (input.y !== 0 && v.speed < 0.8 && performance.now() - this.lastHit < 600) this.stuck += dt; else this.stuck = Math.max(0, this.stuck - dt);
     if (this.stuck > 1.6 && this.stuck - dt <= 1.6) this.toast('Stuck? Press R (or Reset) to get back on the road');
     if (this.stuck > 3.5) { this.resetCar(); this.toast('Back on the road'); }
   }
 
-  private stepWalk(dt: number, input: ReturnType<Roam['input']>) {
-    const w = this.walker;
-    const speed = (input.sprint ? 8.5 : 4.2) * input.y;
-    w.h += input.x * 2.4 * dt;
-    w.x += Math.sin(w.h) * speed * dt; w.z += -Math.cos(w.h) * speed * dt;
-    const hit = this.pushOut(w.x, w.z, 0.4);
-    if (hit) { w.x += hit.dx; w.z += hit.dz; }
-    this.keepInside(w);
-    w.step += Math.abs(speed) * dt * 2.2;
-    w.mesh.position.set(w.x, Math.abs(Math.sin(w.step)) * 0.08, w.z);
-    w.mesh.rotation.y = -w.h;
+  /** On foot with the animated character: camera-relative movement (Sketchbook style). */
+  private stepHuman(dt: number, input: ReturnType<Roam['input']>) {
+    const h = this.human, w = this.walker;
+    if (!h) {
+      const speed = (input.sprint ? 8.5 : 4.2) * input.y;
+      w.h += input.x * 2.4 * dt; w.x += Math.sin(w.h) * speed * dt; w.z += -Math.cos(w.h) * speed * dt;
+      const hit = this.stream.pushOut(w.x, w.z, 0.4, this.tmp.hit); if (hit) { w.x += hit.dx; w.z += hit.dz; }
+      return;
+    }
+    if (performance.now() > this.dragUntil && h.speed > 0.4) this.camYaw.target = this.camYaw.position + wrap(h.heading - this.camYaw.position);
+    this.camYaw.simulate(dt);
+    if (this.dragYaw) { this.camYaw.reset(this.camYaw.position + this.dragYaw); this.dragYaw = 0; }
+    const yaw = this.camYaw.position;
+    const fx = Math.sin(yaw), fz = -Math.cos(yaw), rx = Math.cos(yaw), rz = Math.sin(yaw);
+    h.depth = this.stream.waterDepth(h.x, h.z);
+    const move = h.update(dt, fx * input.y + rx * input.x, fz * input.y + rz * input.x, input.sprint);
+    h.x += move.dx; h.z += move.dz;
+    const hit = this.stream.pushOut(h.x, h.z, 0.35, this.tmp.hit);
+    if (hit) { h.x += hit.dx; h.z += hit.dz; }
+    this.bumpWalker(h);
+    h.sync();
+    w.x = h.x; w.z = h.z; w.h = h.heading;
+    this.stats.water = Number(h.depth.toFixed(1));
+  }
+
+  /** Cars are solid to someone on foot; a moving one knocks them over (stumble, then up again). */
+  private bumpWalker(h: Walker) {
+    const check = (bx: number, bz: number, heading: number, vx: number, vz: number) => {
+      const c = Math.cos(heading), s = Math.sin(heading);
+      const dx = h.x - bx, dz = h.z - bz;
+      const lx = dx * c + dz * s, lz = -dx * s + dz * c;                     // car-local: x right, z backward
+      const ex = 1.0 + 0.35 - Math.abs(lx), ez = 2.35 + 0.35 - Math.abs(lz);
+      if (ex <= 0 || ez <= 0) return;
+      const speed = Math.hypot(vx, vz);
+      if (speed > 3 && !h.down) { h.knockdown(dx + vx * 0.3, dz + vz * 0.3, speed); this.burst(h.x, 0.9, h.z, 6); this.stats.knockdowns = Number(this.stats.knockdowns ?? 0) + 1; return; }
+      // Push out along the shallowest side (you cannot push a car).
+      if (ex < ez) { const sx = Math.sign(lx) * ex; h.x += c * sx; h.z += s * sx; }
+      else { const sz = Math.sign(lz) * ez; h.x += -s * sz; h.z += c * sz; }
+    };
+    for (const v of this.vehicles) check(v.x, v.z, v.heading, v.body.velocity.x, v.body.velocity.z);
+    for (const t of this.traffic) {
+      if (Math.abs(t.x - h.x) > 6 || Math.abs(t.z - h.z) > 6) continue;
+      const moving = t.crashed > 0 && t.body ? [t.body.velocity.x, t.body.velocity.z] : [Math.sin(t.h) * t.speed, -Math.cos(t.h) * t.speed];
+      check(t.x, t.z, t.h, moving[0], moving[1]);
+    }
   }
 
   private stepDrone(dt: number, input: ReturnType<Roam['input']>) {
@@ -722,146 +901,273 @@ class Roam {
     d.h += input.x * 1.6 * dt;
     d.x += Math.sin(d.h) * speed * input.y * dt; d.z += -Math.cos(d.h) * speed * input.y * dt;
     d.alt = clamp(d.alt + ((input.up ? 1 : 0) - (input.down ? 1 : 0)) * 40 * dt, 18, 260);
-    this.keepInside(d);
+  }
+
+  private findNearCar() {
+    const btn = this.root.querySelector<HTMLButtonElement>('.roam-enter')!;
+    this.nearCar = undefined;
+    if (this.mode === 'car') {
+      btn.hidden = !this.touch; btn.textContent = 'Exit car';
+      return;
+    }
+    if (this.mode !== 'walk') { btn.hidden = true; return; }
+    const { x, z } = this.walker;
+    let best = 3.6;
+    for (const v of this.vehicles) { const d = Math.hypot(v.x - x, v.z - z); if (d < best && v.sinking === 0) { best = d; this.nearCar = v; } }
+    for (const t of this.traffic) { const d = Math.hypot(t.x - x, t.z - z); if (d < best && t.sinking === 0) { best = d; this.nearCar = t; } }
+    btn.hidden = !this.nearCar;
+    btn.textContent = this.nearCar ? (this.touch ? 'Enter car' : 'F · Enter car') : '';
   }
 
   // ---------------------------------------------------------------- traffic
-  private placeTraffic(all = false) {
-    const [px, pz] = this.position();
+  private onGraphChanged() {
+    this.graphVersion = this.stream.graphVersion;
+    const g = this.stream.graph;
+    // Re-snap every driving car onto the new road network.
     for (const t of this.traffic) {
-      if (!all && Math.hypot(t.x - px, t.z - pz) < 650 && t.bumped <= 0) continue;
+      if (t.crashed > 0 || t.x > 1e5) continue;
+      const hit = g.nearest(t.x, t.z, 30);
+      if (!hit) { this.retireTraffic(t); continue; }
+      const e = g.edges[hit.edge];
+      const fwd = Math.sin(t.h) * (g.nodes[e.b][0] - g.nodes[e.a][0]) - Math.cos(t.h) * (g.nodes[e.b][1] - g.nodes[e.a][1]) >= 0;
+      Object.assign(t, { edge: hit.edge, from: fwd ? e.a : e.b, t: (fwd ? hit.t : 1 - hit.t) * e.len });
+    }
+    const [x, z] = this.position();
+    this.crowd?.setGraph(g, x, z, this.spots);
+  }
+
+  private retireTraffic(t: TrafficCar) {
+    if (t.body) { this.world.removeBody(t.body); t.body = undefined; }
+    Object.assign(t, { x: 1e6, z: 1e6, crashed: 0, still: 0, sinking: 0, speed: 0 });
+  }
+
+  private placeTraffic(all = false) {
+    const g = this.stream.graph;
+    if (!g.edges.length) return;
+    const [px, pz] = this.position();
+    const far = this.q.viewRadius * 0.95;
+    for (const t of this.traffic) {
+      if (!all && Math.hypot(t.x - px, t.z - pz) < far && t.crashed === 0) continue;
+      if (t.crashed > 0 && Math.hypot(t.x - px, t.z - pz) < far) continue;
+      if (t.body) { this.world.removeBody(t.body); t.body = undefined; }
       for (let tries = 0; tries < 40; tries++) {
-        const ei = Math.floor(Math.random() * this.graph.edges.length), e = this.graph.edges[ei];
-        const [ax, az] = this.graph.nodes[e.a];
+        const ei = Math.floor(Math.random() * g.edges.length), e = g.edges[ei];
+        const [ax, az] = g.nodes[e.a];
         const d = Math.hypot(ax - px, az - pz);
-        if (d < (all ? 40 : 160) || d > 480 || e.cls === 'service') continue;
-        const from = Math.random() < 0.5 ? e.a : e.b;
-        Object.assign(t, { edge: ei, from, t: Math.random() * e.len, bumped: 0, vx: 0, vz: 0, spin: 0,
-          cruise: 7 + this.graph.rank(e) * 1.6 + Math.random() * 3, speed: 6 });
-        this.trafficPose(t);
-        t.shown = t.h;
+        if (d < (all ? 40 : 160) || d > far * 0.8 || e.cls === 'service') continue;
+        Object.assign(t, { edge: ei, from: Math.random() < 0.5 ? e.a : e.b, t: Math.random() * e.len, crashed: 0, still: 0, sinking: 0,
+          cruise: 7 + g.rank(e) * 1.6 + Math.random() * 3, speed: 6 });
+        this.trafficPose(t); t.shown = t.h;
         break;
       }
     }
   }
 
   private trafficPose(t: TrafficCar) {
-    const e = this.graph.edges[t.edge], to = this.graph.other(e, t.from);
-    const [ax, az] = this.graph.nodes[t.from], [bx, bz] = this.graph.nodes[to];
+    const g = this.stream.graph, e = g.edges[t.edge];
+    if (!e) return;
+    const to = g.other(e, t.from);
+    const [ax, az] = g.nodes[t.from], [bx, bz] = g.nodes[to];
     const ux = (bx - ax) / e.len, uz = (bz - az) / e.len;
     const lane = clamp(e.width / 4, 1.5, 3.4) * (this.driveLeft ? -1 : 1);
-    // Right-hand normal of the travel direction (x east, z south): (-uz, ux) points to the driver's right.
     t.x = ax + ux * t.t - uz * lane; t.z = az + uz * t.t + ux * lane;
     t.h = Math.atan2(ux, -uz);
   }
 
-  private stepTraffic(dt: number) {
-    const [px, pz] = this.position();
-    const pv = this.mode === 'car' ? [this.car.vx, this.car.vz] : [0, 0];
-    for (const t of this.traffic) {
-      if (t.bumped > 0) {
-        // Knocked off course: slide, spin, then rejoin the nearest road.
-        t.bumped -= dt;
-        t.x += t.vx * dt; t.z += t.vz * dt; t.h += t.spin * dt;
-        const k = Math.exp(-1.8 * dt); t.vx *= k; t.vz *= k; t.spin *= Math.exp(-2.2 * dt);
-        const hit = this.pushOut(t.x, t.z, 1.2);
-        if (hit) { t.x += hit.dx; t.z += hit.dz; const vn = t.vx * hit.nx + t.vz * hit.nz; if (vn < 0) { t.vx -= hit.nx * vn * 1.3; t.vz -= hit.nz * vn * 1.3; } }
-        if (t.bumped <= 0) {
-          const road = this.graph.nearest(t.x, t.z, 40);
-          if (!road) { t.bumped = 0; t.x = 1e6; continue; }
-          const e = this.graph.edges[road.edge];
-          const fwd = Math.sin(t.h) * (this.graph.nodes[e.b][0] - this.graph.nodes[e.a][0]) - Math.cos(t.h) * (this.graph.nodes[e.b][1] - this.graph.nodes[e.a][1]) >= 0;
-          Object.assign(t, { edge: road.edge, from: fwd ? e.a : e.b, t: (fwd ? road.t : 1 - road.t) * e.len, speed: 0 });
-        }
-      } else {
-        // Follow the road; slow for cars (and the player) ahead.
-        let target = t.cruise;
-        const fx = Math.sin(t.h), fz = -Math.cos(t.h);
-        const ahead = (ox: number, oz: number) => {
-          const rx = ox - t.x, rz = oz - t.z, along = rx * fx + rz * fz, side = Math.abs(rx * fz - rz * fx);
-          if (along > 0 && along < 16 && side < 2.6) target = Math.min(target, Math.max(0, (along - 6) * 0.9));
-        };
-        for (const o of this.traffic) if (o !== t) ahead(o.x, o.z);
-        if (this.mode !== 'drone') ahead(px, pz);
-        t.speed += clamp(target - t.speed, -9 * dt, 3 * dt);
-        t.t += t.speed * dt;
-        let e = this.graph.edges[t.edge];
-        let guard = 0;
-        while (t.t > e.len && guard++ < 8) {
-          t.t -= e.len;
-          const node = this.graph.other(e, t.from);
-          const [ax, az] = this.graph.nodes[t.from], [nx, nz] = this.graph.nodes[node];
-          const dirx = (nx - ax) / e.len, dirz = (nz - az) / e.len;
-          const options = this.graph.adj[node].filter(i => i !== t.edge);
-          let next = t.edge;
-          if (options.length) {
-            // Prefer going roughly straight, with some turns.
-            const scored = options.map(i => {
-              const o = this.graph.edges[i], [ox, oz] = this.graph.nodes[this.graph.other(o, node)];
-              const l = Math.hypot(ox - nx, oz - nz) || 1;
-              return { i, s: ((ox - nx) * dirx + (oz - nz) * dirz) / l + Math.random() * 0.9 + (o.cls === 'service' ? -0.6 : 0) };
-            }).sort((a, b) => b.s - a.s);
-            next = scored[0].i;
-          }
-          // Arriving at `node`: the next edge (or a U-turn on this one) starts there.
-          t.from = node;
-          t.edge = next;
-          e = this.graph.edges[next];
-        }
-        this.trafficPose(t);
-      }
-      // Player car hits traffic: both react.
-      if (this.mode === 'car') for (const off of [1.25, -1.25]) {
-        const cx = this.car.x + Math.sin(this.car.h) * off, cz = this.car.z - Math.cos(this.car.h) * off;
-        const dx = cx - t.x, dz = cz - t.z, d = Math.hypot(dx, dz);
-        if (d > 2.5 || d < 1e-3) continue;
-        const nx = dx / d, nz = dz / d;
-        const tvx = t.bumped > 0 ? t.vx : Math.sin(t.h) * t.speed, tvz = t.bumped > 0 ? t.vz : -Math.cos(t.h) * t.speed;
-        const rel = (pv[0] - tvx) * nx + (pv[1] - tvz) * nz;
-        this.car.x += nx * (2.5 - d) * 0.6; this.car.z += nz * (2.5 - d) * 0.6;
-        if (rel < 0) {
-          const j = -1.3 * rel / 2;
-          this.car.vx += nx * j; this.car.vz += nz * j;
-          t.vx = tvx - nx * j; t.vz = tvz - nz * j; t.spin = (Math.random() - 0.5) * 3 * Math.min(1, -rel / 8);
-          t.bumped = 2.2;
-          this.impact(-rel, t.x + nx * 1.2, t.z + nz * 1.2, true);
-        }
-        pv[0] = this.car.vx; pv[1] = this.car.vz;
-      }
-      t.shown += Math.atan2(Math.sin(t.h - t.shown), Math.cos(t.h - t.shown)) * Math.min(1, dt * 8);
+  private trafficBody(t: TrafficCar) {
+    const body = new CANNON.Body({ mass: 0, type: CANNON.Body.KINEMATIC, allowSleep: false });
+    body.addShape(new CANNON.Box(CAR.half), new CANNON.Vec3(0, 0.25, 0));
+    // A crash with a moving body turns this car into a real, sliding rigid body (and can chain into a pile-up).
+    body.addEventListener('collide', (e: { body: CANNON.Body; contact: CANNON.ContactEquation }) => {
+      if (t.crashed > 0) return;
+      const impact = Math.abs(e.contact.getImpactVelocityAlongNormal());
+      // The hitter's velocity is read now, before the solver bounces it back.
+      if (impact > 2.5 && e.body.type === CANNON.Body.DYNAMIC && e.body.mass > 50) this.pendingCrash.push({ t, vx: e.body.velocity.x, vz: e.body.velocity.z });
+    });
+    this.world.addBody(body);
+    return body;
+  }
+
+  /** Convert queued traffic cars to dynamic bodies after the physics step (not inside it). */
+  private flushCrashes() {
+    for (const { t, vx, vz } of this.pendingCrash) {
+      if (!t.body || t.crashed > 0) continue;
+      const b = t.body;
+      b.type = CANNON.Body.DYNAMIC; b.mass = CAR.mass; b.updateMassProperties();
+      b.linearDamping = 0.3; b.angularDamping = 0.5;
+      b.velocity.set(Math.sin(t.h) * t.speed, 0, -Math.cos(t.h) * t.speed);
+      // Momentum from whatever hit it (equal masses, partly elastic): about 60% of the hitter's velocity.
+      b.velocity.x += vx * 0.6; b.velocity.z += vz * 0.6;
+      if (this.driving && Math.hypot(this.driving.x - t.x, this.driving.z - t.z) < 7) this.impact(Math.hypot(vx, vz), t.x, t.z, true);
+      b.angularVelocity.set(0, (Math.random() - 0.5) * 3, 0);
+      b.wakeUp();
+      t.crashed = 0.001; t.still = 0;
+      this.stats.crashes = Number(this.stats.crashes) + 1;
     }
-    // Recycle cars that fell far behind, and draw.
+    this.pendingCrash.length = 0;
+  }
+
+  private stepTraffic(dt: number) {
+    const g = this.stream.graph;
+    if (!g.edges.length) return;
+    const [px, pz] = this.position();
+    const physR = this.q.physicsRadius;
+    for (const t of this.traffic) {
+      if (t.x > 1e5) continue;
+      const near = Math.hypot(t.x - px, t.z - pz) < physR;
+      if (t.crashed > 0) {
+        const b = t.body!;
+        t.crashed += dt;
+        t.x = b.position.x; t.z = b.position.z;
+        const q = b.quaternion;
+        t.h = Math.atan2(-2 * (q.x * q.z + q.w * q.y), (1 - 2 * (q.x * q.x + q.y * q.y)));
+        t.shown = t.h;
+        if (this.stream.waterDepth(t.x, t.z) > 0.4) { t.sinking += dt; if (t.sinking > 2) this.retireTraffic(t); continue; }
+        t.still = b.velocity.length() < 0.6 ? t.still + dt : 0;
+        if (t.still > 2.5 || t.crashed > 12) {
+          // Rejoin the road and drive on (the driver is fine).
+          const road = g.nearest(t.x, t.z, 40);
+          if (!road) { this.retireTraffic(t); continue; }
+          const e = g.edges[road.edge];
+          const fwd = Math.sin(t.h) * (g.nodes[e.b][0] - g.nodes[e.a][0]) - Math.cos(t.h) * (g.nodes[e.b][1] - g.nodes[e.a][1]) >= 0;
+          Object.assign(t, { edge: road.edge, from: fwd ? e.a : e.b, t: (fwd ? road.t : 1 - road.t) * e.len, speed: 0, crashed: 0, still: 0 });
+          b.type = CANNON.Body.KINEMATIC; b.mass = 0; b.updateMassProperties(); b.velocity.setZero(); b.angularVelocity.setZero();
+        }
+        continue;
+      }
+      // Follow the road; slow for cars (and the player) ahead.
+      let target = t.cruise;
+      const fx = Math.sin(t.h), fz = -Math.cos(t.h);
+      const ahead = (ox: number, oz: number) => {
+        const rx = ox - t.x, rz = oz - t.z, along = rx * fx + rz * fz, side = Math.abs(rx * fz - rz * fx);
+        if (along > 0 && along < 16 && side < 2.6) target = Math.min(target, Math.max(0, (along - 6) * 0.9));
+      };
+      for (const o of this.traffic) if (o !== t && o.x < 1e5) ahead(o.x, o.z);
+      for (const v of this.vehicles) ahead(v.x, v.z);
+      if (this.mode === 'walk') ahead(this.walker.x, this.walker.z);
+      t.speed += clamp(target - t.speed, -9 * dt, 3 * dt);
+      t.t += t.speed * dt;
+      let e = g.edges[t.edge], guard = 0;
+      while (e && t.t > e.len && guard++ < 8) {
+        t.t -= e.len;
+        const node = g.other(e, t.from);
+        const [ax, az] = g.nodes[t.from], [nx, nz] = g.nodes[node];
+        const dirx = (nx - ax) / e.len, dirz = (nz - az) / e.len;
+        const options = g.adj[node].filter(i => i !== t.edge);
+        let next = t.edge, best = -Infinity;
+        for (const i of options) {
+          const o = g.edges[i], [ox, oz] = g.nodes[g.other(o, node)], l = Math.hypot(ox - nx, oz - nz) || 1;
+          const s = ((ox - nx) * dirx + (oz - nz) * dirz) / l + Math.random() * 0.9 + (o.cls === 'service' ? -0.6 : 0);
+          if (s > best) { best = s; next = i; }
+        }
+        t.from = node; t.edge = next; e = g.edges[next];
+      }
+      this.trafficPose(t);
+      t.shown += wrap(t.h - t.shown) * Math.min(1, dt * 8);
+      // Kinematic body only near the player; far traffic is visuals only.
+      if (near && !t.body) t.body = this.trafficBody(t);
+      else if (!near && t.body) { this.world.removeBody(t.body); t.body = undefined; }
+      if (t.body) {
+        t.body.position.set(t.x, 0.65, t.z);
+        t.body.quaternion.setFromEuler(0, -t.shown, 0);
+        t.body.velocity.set(fx * t.speed, 0, fz * t.speed);
+      }
+    }
     if (Math.random() < dt * 2) this.placeTraffic();
-    const m = new THREE.Matrix4(), q = new THREE.Quaternion(), up = new THREE.Vector3(0, 1, 0), one = new THREE.Vector3(1, 1, 1);
+  }
+
+  private drawTraffic() {
+    const { m, q, up, s: one, p } = this.tmp;
     this.traffic.forEach((t, i) => {
-      q.setFromAxisAngle(up, -t.shown);
-      m.compose(new THREE.Vector3(t.x, 0, t.z), q, one);
+      if (t.crashed > 0 && t.body) {
+        const b = t.body;
+        q.set(b.quaternion.x, b.quaternion.y, b.quaternion.z, b.quaternion.w);
+        m.compose(p.set(b.position.x, b.position.y - 0.65 - t.sinking * 0.6, b.position.z), q, one);
+      } else {
+        q.setFromAxisAngle(up, -t.shown);
+        m.compose(p.set(t.x, 0, t.z), q, one);
+      }
       this.trafficMesh.body.setMatrixAt(i, m); this.trafficMesh.cabin.setMatrixAt(i, m); this.trafficMesh.lights.setMatrixAt(i, m);
     });
     for (const im of [this.trafficMesh.body, this.trafficMesh.cabin, this.trafficMesh.lights]) im.instanceMatrix.needsUpdate = true;
     if (this.trafficMesh.body.instanceColor) this.trafficMesh.body.instanceColor.needsUpdate = true;
   }
 
+  /** Keep a few parked cars along nearby streets; cars far away are removed. */
+  private manageParked() {
+    const [px, pz] = this.position();
+    for (const v of [...this.vehicles]) {
+      if (v === this.driving) continue;
+      if (Math.hypot(v.x - px, v.z - pz) > this.q.viewRadius) this.removeVehicle(v);
+    }
+    const parked = this.vehicles.filter(v => v !== this.driving).length;
+    const roads = this.stream.roadsNear(px, pz, this.q.physicsRadius * 1.5).filter(r => r.drivable && r.width <= 9 && r.width >= 6.5);
+    for (let i = parked; i < this.q.parked && roads.length; i++) {
+      const r = roads[Math.floor(Math.random() * roads.length)];
+      const k = Math.floor(Math.random() * (r.pts.length - 1));
+      const [ax, az] = r.pts[k], [bx, bz] = r.pts[k + 1], len = Math.hypot(bx - ax, bz - az);
+      if (len < 8) continue;
+      const ux = (bx - ax) / len, uz = (bz - az) / len, side = (r.width / 2 - 1.1) * (this.driveLeft ? -1 : 1);
+      const x = (ax + bx) / 2 - uz * side, z = (az + bz) / 2 + ux * side;
+      if (Math.hypot(x - px, z - pz) < 25 || this.stream.pushOut(x, z, 1.2, this.tmp.hit)) continue;
+      const v = this.newVehicle(CAR_COLORS[Math.floor(Math.random() * CAR_COLORS.length)], x, z, Math.atan2(ux, -uz));
+      v.park();
+    }
+  }
+
+  /** Cones and bins along big roads that react when hit (skipped on low-tier devices). */
+  private manageProps() {
+    if (!this.q.props) return;
+    const [px, pz] = this.position();
+    for (const p of [...this.props]) {
+      if (Math.hypot(p.body.position.x - px, p.body.position.z - pz) < this.q.physicsRadius * 1.3) continue;
+      this.world.removeBody(p.body); this.scene.remove(p.mesh); p.mesh.geometry.dispose(); (p.mesh.material as THREE.Material).dispose();
+      this.props.splice(this.props.indexOf(p), 1);
+    }
+    const max = this.q.tier === 'high' ? 24 : 12;
+    const roads = this.stream.roadsNear(px, pz, this.q.physicsRadius).filter(r => r.drivable && r.width >= 9);
+    for (let i = this.props.length; i < max && roads.length; i++) {
+      const r = roads[Math.floor(Math.random() * roads.length)];
+      const k = Math.floor(Math.random() * (r.pts.length - 1));
+      const [ax, az] = r.pts[k], [bx, bz] = r.pts[k + 1], len = Math.hypot(bx - ax, bz - az) || 1;
+      const t = Math.random(), side = (r.width / 2 + 0.6) * (Math.random() < 0.5 ? 1 : -1);
+      const x = ax + (bx - ax) * t - (bz - az) / len * side, z = az + (bz - az) * t + (bx - ax) / len * side;
+      if (Math.hypot(x - px, z - pz) < 20 || this.stream.pushOut(x, z, 0.5, this.tmp.hit)) continue;
+      const cone = Math.random() < 0.6;
+      const size = cone ? new CANNON.Vec3(0.22, 0.38, 0.22) : new CANNON.Vec3(0.32, 0.5, 0.32);
+      const body = new CANNON.Body({ mass: cone ? 3 : 8, linearDamping: 0.3, angularDamping: 0.3, allowSleep: true, sleepSpeedLimit: 0.2 });
+      body.addShape(new CANNON.Box(size));
+      body.position.set(x, size.y, z);
+      this.world.addBody(body);
+      const mesh = new THREE.Mesh(cone ? new THREE.ConeGeometry(0.26, 0.76, 10) : new THREE.CylinderGeometry(0.3, 0.26, 1, 10),
+        new THREE.MeshLambertMaterial({ color: cone ? 0xff8a3d : 0x3c4a43 }));
+      this.scene.add(mesh);
+      this.props.push({ body, mesh });
+    }
+  }
+
   // ---------------------------------------------------------------- effects
-  private burst(x: number, y: number, z: number, n: number) {
+  private burst(x: number, y: number, z: number, n: number, water = false) {
     const pos = this.sparks.geometry.getAttribute('position') as THREE.BufferAttribute;
+    (this.sparks.material as THREE.PointsMaterial).color.setHex(water ? 0xbfe8f2 : 0xffc56b);
     for (let k = 0; k < n; k++) {
       const i = Math.floor(Math.random() * pos.count);
-      pos.setXYZ(i, x, y, z);
-      this.sparkLife[i] = { vx: (Math.random() - 0.5) * 9, vy: Math.random() * 6 + 1, vz: (Math.random() - 0.5) * 9, life: 0.4 + Math.random() * 0.4 };
+      pos.setXYZ(i, x + (Math.random() - 0.5) * (water ? 3 : 0.5), y, z + (Math.random() - 0.5) * (water ? 3 : 0.5));
+      this.sparkLife[i] = { vx: (Math.random() - 0.5) * (water ? 5 : 9), vy: Math.random() * (water ? 9 : 6) + 1, vz: (Math.random() - 0.5) * (water ? 5 : 9), life: 0.5 + Math.random() * 0.5 };
     }
   }
 
   private stepSparks(dt: number) {
     const pos = this.sparks.geometry.getAttribute('position') as THREE.BufferAttribute;
     let any = false;
-    this.sparkLife.forEach((s, i) => {
-      if (!s || s.life <= 0) return;
+    for (let i = 0; i < this.sparkLife.length; i++) {
+      const s = this.sparkLife[i];
+      if (!s || s.life <= 0) continue;
       any = true;
       s.life -= dt; s.vy -= 18 * dt;
       pos.setXYZ(i, pos.getX(i) + s.vx * dt, Math.max(0.05, pos.getY(i) + s.vy * dt), pos.getZ(i) + s.vz * dt);
       if (s.life <= 0) pos.setXYZ(i, 0, -50, 0);
-    });
+    }
     if (any) pos.needsUpdate = true;
   }
 
@@ -877,48 +1183,44 @@ class Roam {
     clearTimeout(this.toastTimer);
     this.toastTimer = window.setTimeout(() => t.classList.remove('on'), 2600);
   }
-  private toastTimer = 0;
-
-  private updateCarMesh(dt: number) {
-    const c = this.car;
-    c.mesh.position.set(c.x, 0, c.z);
-    c.mesh.rotation.y = -c.h;
-    const speed = c.vx * Math.sin(c.h) - c.vz * Math.cos(c.h);
-    c.mesh.children.forEach(ch => {
-      if (ch.name === 'front-wheel') ch.rotation.y = -c.steer * 0.5;
-      if (ch.name.endsWith('wheel')) ch.rotation.x -= speed * dt / 0.36;
-    });
-    // Lean a little in turns for feel.
-    c.mesh.rotation.z = clamp(-c.steer * Math.abs(speed) * 0.004, -0.06, 0.06);
-  }
 
   private snapCamera() { this.updateCamera(1, true); }
 
+  /**
+   * Car: chase camera with the racing-game offset (sideways with steering x speed,
+   * further back with speed). On foot: behind the camera yaw spring. Drone: orbit
+   * from above. The camera eases between them, so getting in and out is smooth.
+   */
   private updateCamera(dt: number, snap = false) {
     const [x, z] = this.position(), h = this.heading();
-    const fx = Math.sin(h), fz = -Math.cos(h);
-    const want = new THREE.Vector3(), look = new THREE.Vector3();
-    if (this.mode === 'car') {
-      const speed = Math.hypot(this.car.vx, this.car.vz);
-      const back = 9 + speed * 0.08, height = 3.6 + speed * 0.03;
-      want.set(x - fx * back, height, z - fz * back);
-      look.set(x + fx * 5, 1.2, z + fz * 5);
-      this.camera.fov += (62 + speed * 0.35 - this.camera.fov) * Math.min(1, dt * 3);
+    const fx = Math.sin(h), fz = -Math.cos(h), rx = Math.cos(h), rz = Math.sin(h);
+    const want = this.tmp.want, look = this.tmp.look;
+    let rate = 6;
+    if (this.mode === 'car' && this.driving) {
+      const v = this.driving, speed = v.speed;
+      const side = Math.sin(-v.steering) * speed / 2.5 * 0.35, back = 7.5 + speed / 15, up = 2.8 + speed * 0.02;
+      want.set(x - fx * back + rx * side, up, z - fz * back + rz * side);
+      look.set(x + fx * 5, 1.1, z + fz * 5);
+      this.camera.fov += (62 + speed * 0.3 - this.camera.fov) * Math.min(1, dt * 3);
+      rate = this.seat > 0 ? 3 : 6;
     } else if (this.mode === 'walk') {
-      want.set(x - fx * 5.5, 2.8, z - fz * 5.5);
-      look.set(x + fx * 3, 1.5, z + fz * 3);
+      const yaw = this.human ? this.camYaw.position : h, cx = Math.sin(yaw), cz = -Math.cos(yaw);
+      const swim = this.human?.state === 'swim' ? -0.8 : 0;
+      want.set(x - cx * 4.6, 2.3 + swim, z - cz * 4.6);
+      look.set(x + cx * 1.5, 1.35 + swim, z + cz * 1.5);
       this.camera.fov += (60 - this.camera.fov) * Math.min(1, dt * 3);
+      rate = 4;
     } else {
       const a = this.drone.alt;
       want.set(x - fx * a * 0.75, a, z - fz * a * 0.75);
       look.set(x, 0, z);
       this.camera.fov += (55 - this.camera.fov) * Math.min(1, dt * 3);
+      rate = 4;
     }
-    const k = snap ? 1 : 1 - Math.exp(-dt * (this.mode === 'drone' ? 4 : 6));
+    const k = snap ? 1 : 1 - Math.exp(-dt * rate);
     this.camPos.lerp(want, k); this.camLook.lerp(look, k);
-    // Keep the camera out of buildings when walking or driving.
     if (this.mode !== 'drone') {
-      const hit = this.pushOut(this.camPos.x, this.camPos.z, 0.8);
+      const hit = this.stream.pushOut(this.camPos.x, this.camPos.z, 0.8, this.tmp.hit);
       if (hit) { this.camPos.x += hit.dx; this.camPos.z += hit.dz; }
     }
     this.camera.position.copy(this.camPos);
@@ -933,44 +1235,42 @@ class Roam {
 
   // ---------------------------------------------------------------- HUD
   private updateHud() {
-    const speed = Math.round(Math.hypot(this.car.vx, this.car.vz) * 3.6);
     const box = this.root.querySelector<HTMLElement>('.roam-speed')!;
-    if (this.mode === 'car') { box.querySelector('b')!.textContent = String(speed); box.querySelector('small')!.textContent = 'km/h'; box.querySelector<HTMLElement>('s')!.style.width = Math.min(100, speed / 1.3) + '%'; }
-    else if (this.mode === 'walk') { box.querySelector('b')!.textContent = 'On foot'; box.querySelector('small')!.textContent = this.keys.has('Shift') ? 'running' : 'walking'; box.querySelector<HTMLElement>('s')!.style.width = '0'; }
-    else { box.querySelector('b')!.textContent = Math.round(this.drone.alt) + ' m'; box.querySelector('small')!.textContent = 'drone altitude'; box.querySelector<HTMLElement>('s')!.style.width = Math.min(100, this.drone.alt / 2.6) + '%'; }
-    // Nearest named street.
+    const b = box.querySelector('b')!, small = box.querySelector('small')!, bar = box.querySelector<HTMLElement>('s')!;
+    if (this.mode === 'car') { const speed = Math.round((this.driving?.speed ?? 0) * 3.6); b.textContent = String(speed); small.textContent = 'km/h'; bar.style.width = Math.min(100, speed / 1.1) + '%'; }
+    else if (this.mode === 'walk') {
+      const st = this.human?.state ?? 'walk';
+      b.textContent = st === 'swim' ? 'Swimming' : 'On foot';
+      small.textContent = ({ run: 'running', idle: 'standing', wave: 'waving', down: 'oof!', wade: 'wading', swim: 'in the water' } as Record<string, string>)[st] ?? 'walking';
+      bar.style.width = this.human ? Math.min(100, this.human.speed / 6.2 * 100) + '%' : '0';
+    } else { b.textContent = Math.round(this.drone.alt) + ' m'; small.textContent = 'drone altitude'; bar.style.width = Math.min(100, this.drone.alt / 2.6) + '%'; }
     const [x, z] = this.position();
-    let name = '', best = 24;
-    for (const ox of [-1, 0, 1]) for (const oz of [-1, 0, 1]) for (const i of this.nameGrid.get(this.cellKey(x + ox * 30, z + oz * 30, 30)) ?? []) {
-      const n = this.names[i], vx = n.bx - n.ax, vz = n.bz - n.az, l2 = vx * vx + vz * vz || 1;
-      const t = clamp(((x - n.ax) * vx + (z - n.az) * vz) / l2, 0, 1);
-      const d = Math.hypot(x - n.ax - vx * t, z - n.az - vz * t);
-      if (d < best) { best = d; name = n.name; }
-    }
+    const name = this.stream.streetName(x, z);
     const street = this.root.querySelector<HTMLElement>('.roam-street')!;
     street.querySelector('span')!.textContent = name;
     street.classList.toggle('on', Boolean(name));
+    // Light hint at the edge of what has streamed in, instead of a wall.
+    this.root.querySelector<HTMLElement>('.roam-loading-hint')!.hidden = this.stream.ready(x + Math.sin(this.heading()) * 120, z - Math.cos(this.heading()) * 120) || !this.stream.stats.loading && this.stream.ready(x, z);
     this.updateDest();
     if (this.route && this.routeRemaining() < 22) { const n = this.route.target.name; this.clearRoute(); this.toast('You are here: ' + n); }
   }
 
   private updateLabels() {
     const [px, pz] = this.position();
-    const v = new THREE.Vector3();
-    const far = this.mode === 'drone' ? 1400 : 520;
+    const v = this.tmp.v;
+    const far = this.mode === 'drone' ? 1400 : this.q.labelsFar;
     const w = innerWidth, h = innerHeight;
-    // Nearest first; skip labels that would overlap one already placed.
-    const taken: [number, number][] = [];
+    const taken: number[] = [];
     const order = this.spots.map(s => ({ s, d: Math.hypot(s.x - px, s.z - pz) })).sort((a, b) => (a.s.kind === 'landmark' ? 1 : 0) - (b.s.kind === 'landmark' ? 1 : 0) || a.d - b.d);
     for (const { s, d } of order) {
       if (!s.label) continue;
       v.set(s.x, s.kind === 'audio' ? 9 : 7, s.z).project(this.camera);
       const sx = (v.x * 0.5 + 0.5) * w, sy = (-v.y * 0.5 + 0.5) * h;
       let visible = d < far && v.z < 1 && Math.abs(v.x) < 1.05 && Math.abs(v.y) < 1.05;
-      if (visible && taken.some(([tx, ty]) => Math.abs(tx - sx) < 150 && Math.abs(ty - sy) < 46)) visible = false;
+      if (visible) for (let i = 0; i < taken.length; i += 2) if (Math.abs(taken[i] - sx) < 150 && Math.abs(taken[i + 1] - sy) < 46) { visible = false; break; }
       s.label.style.display = visible ? '' : 'none';
       if (!visible) continue;
-      taken.push([sx, sy]);
+      taken.push(sx, sy);
       s.label.style.transform = `translate(${sx}px, ${sy}px) translate(-50%, -100%)`;
       s.label.style.opacity = String(clamp(1.25 - d / far, 0.35, 1));
       s.label.style.zIndex = String(Math.round(2000 - d));
@@ -978,30 +1278,7 @@ class Roam {
     }
   }
 
-  private renderRoadsImage() {
-    const size = Math.ceil(RADIUS * 2.1 * this.mapScale);
-    const c = document.createElement('canvas'); c.width = c.height = size;
-    const g = c.getContext('2d')!;
-    g.fillStyle = '#1c1f22'; g.fillRect(0, 0, size, size);
-    const o = size / 2, s = this.mapScale;
-    g.fillStyle = '#2c4034';
-    g.strokeStyle = 'transparent';
-    for (const a of this.world.areas) {
-      g.fillStyle = a.kind === 'water' ? '#1f4150' : '#2c4034';
-      g.beginPath(); a.outer.forEach((p, i) => (i ? g.lineTo(o + p[0] * s, o + p[1] * s) : g.moveTo(o + p[0] * s, o + p[1] * s))); g.closePath(); g.fill();
-    }
-    g.lineCap = 'round'; g.lineJoin = 'round';
-    for (const r of [...this.world.roads].sort((a, b) => a.width - b.width)) {
-      g.strokeStyle = r.width >= 10 ? '#d9d2bd' : r.width >= 7 ? '#8d908b' : r.drivable ? '#5d615f' : '#3e4542';
-      g.lineWidth = Math.max(1, r.width * s * 1.1);
-      g.beginPath(); r.pts.forEach((p, i) => (i ? g.lineTo(o + p[0] * s, o + p[1] * s) : g.moveTo(o + p[0] * s, o + p[1] * s))); g.stroke();
-    }
-    g.strokeStyle = 'rgba(245,189,82,.5)'; g.lineWidth = 2;
-    g.beginPath(); g.arc(o, o, RADIUS * s, 0, Math.PI * 2); g.stroke();
-    this.roadsImage = c;
-  }
-
-  /** Mini-map: heading-up and close; the big map is north-up and shows everything. */
+  /** Mini-map from the streamed chunk tiles: heading-up and close; the big map is north-up. */
   private drawMinimap(big = false) {
     const canvas = big ? this.root.querySelector<HTMLCanvasElement>('.roam-bigmap canvas')! : this.minimap;
     const dpr = Math.min(2, devicePixelRatio);
@@ -1010,56 +1287,51 @@ class Roam {
     const g = canvas.getContext('2d')!;
     const W = canvas.width, H = canvas.height;
     const [px, pz] = this.position(), h = this.heading();
-    const scale = big ? Math.min(W, H) / (RADIUS * 2.15) : (this.mode === 'drone' ? 0.32 : 0.6) * dpr; // px per metre
-    const view = this.mapView(big, W, H, scale);
+    const range = big ? this.q.viewRadius * 1.3 : this.mode === 'drone' ? 320 : 170;
+    const scale = Math.min(W, H) / (range * 2);
     g.setTransform(1, 0, 0, 1, 0, 0);
     g.fillStyle = '#16181b'; g.fillRect(0, 0, W, H);
     g.save();
     g.translate(W / 2, H / 2);
     if (!big) g.rotate(-h);
     g.scale(scale, scale);
-    g.translate(-view.cx, -view.cz);
-    const img = this.roadsImage, o = img.width / 2 / this.mapScale;
-    g.drawImage(img, -o, -o, img.width / this.mapScale, img.height / this.mapScale);
+    g.translate(-px, -pz);
+    const s = this.stream.mapScale;
+    for (const tile of this.stream.tiles(px, pz, range * 1.5)) g.drawImage(tile.canvas, tile.x, tile.z, tile.canvas.width / s, tile.canvas.height / s);
     if (this.route) {
-      g.strokeStyle = '#f5bd52'; g.lineWidth = 5 / scale; g.lineJoin = 'round';
+      g.strokeStyle = '#f5bd52'; g.lineWidth = 5 * dpr / scale / 2; g.lineJoin = 'round';
       g.beginPath(); this.route.points.forEach((p, i) => (i ? g.lineTo(p[0], p[1]) : g.moveTo(p[0], p[1]))); g.stroke();
     }
     g.fillStyle = '#9da3a8';
-    for (const t of this.traffic) { g.beginPath(); g.arc(t.x, t.z, 2.2 / scale * dpr, 0, Math.PI * 2); g.fill(); }
-    for (const s of this.spots) {
-      const pulse = s.kind === 'audio' && (s.live ?? 0) > 0 ? 1 + 0.35 * Math.sin(this.beaconTime * 5) : 1;
-      g.fillStyle = '#' + s.color.toString(16).padStart(6, '0');
-      g.beginPath(); g.arc(s.x, s.z, (s.kind === 'landmark' ? 2.6 : 4.4) * pulse * dpr / scale, 0, Math.PI * 2); g.fill();
-      if (big) { g.fillStyle = '#efe9dc'; g.font = `${11 * dpr / scale}px Geist, sans-serif`; g.fillText(s.name.slice(0, 26), s.x + 7 * dpr / scale, s.z + 4 * dpr / scale); }
+    for (const t of this.traffic) if (t.x < 1e5) { g.beginPath(); g.arc(t.x, t.z, 2.2 * dpr / scale / 2, 0, Math.PI * 2); g.fill(); }
+    for (const v of this.vehicles) if (v !== this.driving) { g.fillStyle = '#' + v.color.toString(16).padStart(6, '0'); g.beginPath(); g.arc(v.x, v.z, 2.6 * dpr / scale / 2, 0, Math.PI * 2); g.fill(); }
+    for (const sp of this.spots) {
+      const pulse = sp.kind === 'audio' && (sp.live ?? 0) > 0 ? 1 + 0.35 * Math.sin(this.beaconTime * 5) : 1;
+      g.fillStyle = '#' + sp.color.toString(16).padStart(6, '0');
+      g.beginPath(); g.arc(sp.x, sp.z, (sp.kind === 'landmark' ? 2.6 : 4.4) * pulse * dpr / scale / 2, 0, Math.PI * 2); g.fill();
+      if (big) { g.fillStyle = '#efe9dc'; g.font = `${11 * dpr / scale / 2}px Geist, sans-serif`; g.fillText(sp.name.slice(0, 26), sp.x + 7 * dpr / scale / 2, sp.z + 4 * dpr / scale / 2); }
     }
     g.restore();
-    // Player arrow.
     g.save();
-    if (big) { g.translate(W / 2 + (px - view.cx) * scale, H / 2 + (pz - view.cz) * scale); g.rotate(h); }
-    else g.translate(W / 2, H / 2);
+    g.translate(W / 2, H / 2);
+    if (big) g.rotate(h);
     const a = 9 * dpr;
     g.fillStyle = this.mode === 'walk' ? '#b4ffe6' : '#f5bd52'; g.strokeStyle = '#111'; g.lineWidth = 2 * dpr;
     g.beginPath(); g.moveTo(0, -a); g.lineTo(a * 0.72, a * 0.8); g.lineTo(0, a * 0.35); g.lineTo(-a * 0.72, a * 0.8); g.closePath(); g.fill(); g.stroke();
     g.restore();
   }
 
-  private mapView(big: boolean, _W: number, _H: number, _scale: number) {
-    const [px, pz] = this.position();
-    return big ? { cx: 0, cz: 0 } : { cx: px, cz: pz };
-  }
-
   private onMapClick(canvas: HTMLCanvasElement, e: MouseEvent, big: boolean) {
     const r = canvas.getBoundingClientRect();
-    const dpr = canvas.width / r.width;
-    let x = (e.clientX - r.left) * dpr - canvas.width / 2, y = (e.clientY - r.top) * dpr - canvas.height / 2;
-    const scale = big ? Math.min(canvas.width, canvas.height) / (RADIUS * 2.15) : (this.mode === 'drone' ? 0.32 : 0.6) * Math.min(2, devicePixelRatio);
+    const k = canvas.width / r.width;
+    let x = (e.clientX - r.left) * k - canvas.width / 2, y = (e.clientY - r.top) * k - canvas.height / 2;
+    const range = big ? this.q.viewRadius * 1.3 : this.mode === 'drone' ? 320 : 170;
+    const scale = Math.min(canvas.width, canvas.height) / (range * 2);
     if (!big) { const h = this.heading(), c = Math.cos(h), s = Math.sin(h); [x, y] = [x * c - y * s, x * s + y * c]; }
-    const view = this.mapView(big, 0, 0, scale);
-    const wx = view.cx + x / scale, wz = view.cz + y / scale;
-    // Snap to a place if the tap was on one.
+    const [px, pz] = this.position();
+    const wx = px + x / scale, wz = pz + y / scale;
     const near = this.spots.map(s => ({ s, d: Math.hypot(s.x - wx, s.z - wz) })).sort((a, b) => a.d - b.d)[0];
-    const target = near && near.d < 18 / scale * dpr ? near.s : { name: 'Map point', x: wx, z: wz };
+    const target = near && near.d < 18 * k / scale ? near.s : { name: 'Map point', x: wx, z: wz };
     if (big) this.toggleBigMap(false);
     this.setRoute(target);
   }
@@ -1076,18 +1348,21 @@ class Roam {
     if (!show) { localStorage.setItem('nearby.roam.onboarded', '1'); return; }
     const keys = this.touch
       ? `<li><b>Move</b><span>Drag the stick: up to go, down to brake or reverse, sideways to steer</span></li>
-         <li><b>Drift</b><span>Hold Drift while turning</span></li>`
+         <li><b>On foot</b><span>The stick walks you, Run toggles jogging, Wave waves; drag the view to look around</span></li>
+         <li><b>Cars</b><span>Walk up to any car and tap Enter car; tap Exit car to get out</span></li>`
       : `<li><b>Drive</b><span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or arrows · <kbd>Space</kbd> drift · <kbd>R</kbd> back on the road</span></li>
-         <li><b>Explore</b><span><kbd>1</kbd> car · <kbd>2</kbd> walk · <kbd>3</kbd> drone (<kbd>E</kbd>/<kbd>Q</kbd> up and down)</span></li>
+         <li><b>Cars</b><span>Walk up to any car and press <kbd>F</kbd> to take it; <kbd>F</kbd> again to get out</span></li>
+         <li><b>Explore</b><span><kbd>1</kbd> car · <kbd>2</kbd> walk (<kbd>Shift</kbd> run, <kbd>H</kbd> wave, drag to look) · <kbd>3</kbd> drone (<kbd>E</kbd>/<kbd>Q</kbd>)</span></li>
          <li><b>Find</b><span><kbd>G</kbd> places · <kbd>M</kbd> big map · <kbd>Esc</kbd> back to the map</span></li>`;
     box.innerHTML = `<div class="roam-onboard-card">
         <span class="roam-kicker">Free roam · ${esc(this.options.place?.locality ?? 'your area')}</span>
         <h2>Explore your neighbourhood</h2>
-        <p>Real streets and buildings from the map. Drive, walk or fly a drone. Glowing columns mark places: activities, rooms, events and live audio.</p>
+        <p>Real streets and buildings, streamed from the map as you go. Drive, walk or fly a drone. Glowing columns mark places: activities, rooms, events and live audio.</p>
         <ul>${keys}
           <li><b>Go places</b><span>Tap the mini-map or open Places to get a route, or jump straight there</span></li>
           <li><b>Live audio</b><span>Get within ${LISTEN_RADIUS} m of a pink column to listen in; the people talking can see you are listening</span></li></ul>
         <button type="button">Start exploring</button>
+        <p class="roam-credits">Character “Business Man” by Quaternius (CC0) · movement from Sketchbook by swift502 (MIT) · car handling from pmndrs/racing-game (MIT) and folio-2019 by Bruno Simon (MIT) · physics by cannon-es (MIT) · map data © OpenStreetMap contributors</p>
       </div>`;
     box.querySelector('button')!.onclick = () => this.onboarding(false);
   }
@@ -1159,4 +1434,110 @@ class Roam {
     act('stop', () => { this.stopAudio(); this.muteUntilOutside.add(venue.id); });
     act('speak', () => { this.stopAudio(); void this.listen(venue, true); });
   }
+
+  private drivePilot(): [number, number] {
+    const a = this.autopilot!, v = this.driving!;
+    const next = () => {
+      // A new destination about 1.5 km further on, roughly keeping the direction.
+      a.dir += (Math.random() - 0.5) * 1.2;
+      const pts = this.stream.graph.route([v.x, v.z], [v.x + Math.sin(a.dir) * 1500, v.z - Math.cos(a.dir) * 1500]);
+      a.points = pts ?? []; a.i = 0;
+    };
+    if (!a.points.length) next();
+    while (a.i < a.points.length && Math.hypot(a.points[a.i][0] - v.x, a.points[a.i][1] - v.z) < 14) a.i++;
+    if (a.i >= a.points.length) { next(); return [0, 0.5]; }
+    // Stuck against something: back out with the wheel turned, then plan again.
+    if (a.back > 0) { a.back -= 1 / 60; if (a.back <= 0) next(); return [1, -1]; }
+    a.slow = v.speed < 1 ? a.slow + 1 / 60 : 0;
+    if (a.slow > 1.5) { a.slow = 0; a.back = 1.2; return [1, -1]; }
+    if (a.i >= a.points.length) return [0, 0];
+    const [tx, tz] = a.points[a.i];
+    const angle = wrap(Math.atan2(tx - v.x, -(tz - v.z)) - v.heading);
+    // Like a careful driver: fast on straights, slow into corners.
+    const ahead = a.points[Math.min(a.points.length - 1, a.i + 3)];
+    const turn = Math.abs(wrap(Math.atan2(ahead[0] - tx, -(ahead[1] - tz)) - v.heading));
+    const want = Math.abs(angle) > 0.6 || turn > 0.9 ? 7 : turn > 0.45 ? 13 : 24;
+    return [clamp(angle * 2.2, -1, 1), v.speed < want ? 1 : v.speed > want + 3 ? -0.7 : 0];
+  }
+
+  // ---------------------------------------------------------------- test hooks (?roamdebug)
+  private debugHooks() {
+    return {
+      teleport: (x: number, z: number) => {
+        this.stream.buildAround(x, z);
+        this.drone.x = this.walker.x = x; this.drone.z = this.walker.z = z; this.human?.place(x, z, this.walker.h);
+        if (this.driving) { const s = this.stream.graph.spawnNear(x, z); this.driving.place(s?.point[0] ?? x, s?.point[1] ?? z, s?.heading ?? 0); }
+        this.snapCamera();
+      },
+      place: (x: number, z: number, heading: number) => { this.driving?.place(x, z, heading); this.walker = { x, z, h: heading }; this.human?.place(x, z, heading); this.snapCamera(); },
+      spots: () => this.spots.map(sp => ({ id: sp.id, name: sp.name, kind: sp.kind, x: sp.x, z: sp.z, live: sp.live })),
+      position: () => this.position(),
+      pilotState: () => { const a = this.autopilot, v = this.driving; return a && v ? { n: a.points.length, i: a.i, target: a.points[a.i]?.map(Math.round), car: [Math.round(v.x), Math.round(v.z)], heading: v.heading.toFixed(2), speed: v.speed.toFixed(1), upright: v.upright.toFixed(2), y: v.body.position.y.toFixed(2), sleeping: v.body.sleepState } : null; },
+      autopilot: (on: boolean) => { this.autopilot = on ? { points: [], i: 0, slow: 0, dir: this.heading(), back: 0 } : undefined; return on; },
+      /** Put the car on the nearest big road (trunk/primary/secondary), facing along it. */
+      toMainRoad: () => {
+        const g = this.stream.graph, [x, z] = this.position();
+        let best = -1, bd = Infinity;
+        g.edges.forEach((e, i) => {
+          if (!['motorway', 'trunk', 'primary', 'secondary'].includes(e.cls) || e.len < 20) return;
+          const [ax, az] = g.nodes[e.a], d = Math.hypot(ax - x, az - z);
+          if (d < bd) { bd = d; best = i; }
+        });
+        if (best < 0) return false;
+        const e = g.edges[best], [ax, az] = g.nodes[e.a], [bx, bz] = g.nodes[e.b];
+        const h = Math.atan2(bx - ax, -(bz - az));
+        this.stream.buildAround((ax + bx) / 2, (az + bz) / 2);
+        this.driving?.place((ax + bx) / 2, (az + bz) / 2, h);
+        this.snapCamera();
+        return { cls: e.cls, distance: Math.round(bd) };
+      },
+      quality: () => ({ ...this.q }),
+      /** Three stopped traffic cars in a line ahead of the player's car. */
+      lineUp: () => {
+        const v = this.driving; if (!v) return false;
+        const h = v.heading, fx = Math.sin(h), fz = -Math.cos(h);
+        this.traffic.slice(0, 3).forEach((t, i) => {
+          if (t.body) { this.world.removeBody(t.body); t.body = undefined; }
+          Object.assign(t, { x: v.x + fx * (22 + i * 5.2), z: v.z + fz * (22 + i * 5.2), h, shown: h, cruise: 0, speed: 0, crashed: 0, still: 0, sinking: 0 });
+          t.body = this.trafficBody(t);
+          t.body.position.set(t.x, 0.65, t.z); t.body.quaternion.setFromEuler(0, -h, 0);
+        });
+        // Freeze them in place until hit: give them an edge that ends nowhere.
+        this.traffic.slice(0, 3).forEach(t => { t.edge = -1 as unknown as number; });
+        return true;
+      },
+      /** Nearest water edge: place the car facing it from about 40 m away on land. */
+      aimAtWater: () => {
+        let best: { x: number; z: number; d: number } | null = null;
+        const [px, pz] = this.position();
+        for (let a = 0; a < 64; a++) for (let r = 20; r < 900; r += 15) {
+          const x = px + Math.cos(a / 64 * Math.PI * 2) * r, z = pz + Math.sin(a / 64 * Math.PI * 2) * r;
+          if (this.stream.waterDepth(x, z) > 6) { if (!best || r < best.d) best = { x, z, d: r }; break; }
+        }
+        if (!best) return false;
+        const h = Math.atan2(best.x - px, -(best.z - pz)), fx = Math.sin(h), fz = -Math.cos(h);
+        let x = best.x, z = best.z;
+        for (let s = 0; s < 120 && this.stream.waterDepth(x, z) >= 0; s++) { x -= fx * 2; z -= fz * 2; }
+        x -= fx * 40; z -= fz * 40;
+        this.stream.buildAround(x, z);
+        this.driving?.place(x, z, h); this.walker = { x, z, h }; this.human?.place(x, z, h);
+        this.snapCamera();
+        return { x, z, h, waterAt: best };
+      },
+      nearestTraffic: () => { const [x, z] = this.position(); return this.traffic.filter(t => t.x < 1e5).map(t => ({ x: t.x, z: t.z, d: Math.hypot(t.x - x, t.z - z) })).sort((a, b) => a.d - b.d)[0]; },
+      walkTo: (x: number, z: number) => { this.walker.x = x; this.walker.z = z; this.human?.place(x, z, this.walker.h); },
+      /** Roll the nearest parked car at the walker (tests the knockdown). */
+      rollCarAtWalker: () => {
+        const { x, z } = this.walker;
+        const v = this.vehicles.filter(o => o !== this.driving).sort((a, b) => Math.hypot(a.x - x, a.z - z) - Math.hypot(b.x - x, b.z - z))[0];
+        if (!v) return false;
+        const h = this.walker.h + Math.PI;
+        v.place(x - Math.sin(h) * -10, z + Math.cos(h) * -10, h);
+        for (let i = 0; i < 4; i++) v.raycast.setBrake(0, i);
+        v.body.velocity.set((x - v.x) / 10 * 9, 0, (z - v.z) / 10 * 9);
+        return true;
+      },
+    };
+  }
 }
+

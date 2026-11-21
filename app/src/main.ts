@@ -6,7 +6,6 @@ import { mountAsk } from './ask/ask';
 import { mountCreate, type Created } from './create/create';
 import { mountCommunities } from './community/community';
 import { chatPanel as createChatPanel } from './chat/panel';
-import { openRoam } from './roam/roam';
 import { EarthExperience, type Activity, type Place } from './world/earth';
 
 if (new URLSearchParams(location.search).has('instant')) document.documentElement.classList.add('instant');
@@ -419,7 +418,9 @@ $('#enter-roam').onclick = () => {
   closeEvent();
   setChatOpen(false);
   // Free Roam: drive, walk or fly through this area (src/roam).
-  void openRoam({ map: atlas['map'], place, activities, user: chat.user, onExit: () => $('#enter-roam').focus({preventScroll: true}) });
+  // Loaded on demand so Free Roam (three.js scene code, physics, character) does not grow the first load.
+  void import('./roam/roam').then(({ openRoam }) =>
+    openRoam({ map: atlas['map'], place, activities, user: chat.user, onExit: () => $('#enter-roam').focus({preventScroll: true}) }));
 };
 $('#leave-roam').onclick = () => {
   setRoam(false);

@@ -119,7 +119,7 @@ export function buildRoads(roads: Road[]) {
  * draw a grid of windows, some lit amber; roofs get a flat lighter tone.
  * Also returns the wall segments for collisions.
  */
-export function buildBuildings(buildings: Building[]) {
+export function buildBuildings(buildings: Building[], windows = true) {
   const pos: number[] = [], idx: number[] = [], col: number[] = [], facade: number[] = [];
   const segments: number[] = [];
   const c = new THREE.Color();
@@ -157,7 +157,7 @@ export function buildBuildings(buildings: Building[]) {
   }
   const g = geometryFrom(pos, idx, col, { aFacade: [facade, 3] });
   const material = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
-  material.onBeforeCompile = shader => {
+  if (windows) material.onBeforeCompile = shader => {
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nattribute vec3 aFacade;\nvarying vec3 vFacade;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvFacade = aFacade;');
@@ -272,7 +272,12 @@ export function makeRoute(points: XZ[]) {
 export function makeSparks(count = 90) {
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(count * 3), 3));
-  const points = new THREE.Points(geometry, new THREE.PointsMaterial({ color: 0xffc56b, size: 0.35, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
+  // Soft round dots (a radial gradient), not square points.
+  const dot = document.createElement('canvas'); dot.width = dot.height = 32;
+  const g = dot.getContext('2d')!, grad = g.createRadialGradient(16, 16, 0, 16, 16, 16);
+  grad.addColorStop(0, 'rgba(255,255,255,1)'); grad.addColorStop(0.45, 'rgba(255,255,255,.7)'); grad.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = grad; g.fillRect(0, 0, 32, 32);
+  const points = new THREE.Points(geometry, new THREE.PointsMaterial({ color: 0xffc56b, size: 0.45, map: new THREE.CanvasTexture(dot), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
   points.frustumCulled = false;
   return points;
 }
