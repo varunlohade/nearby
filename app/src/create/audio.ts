@@ -1,5 +1,7 @@
 // Small-group live audio: a WebRTC mesh (up to 6 people). The app server only
 // relays the connection handshake (server/places.ts); audio flows peer to peer.
+// The handshake stream ends before the server's time limit with a "reconnect"
+// event; the session then reopens it with the same peer id, keeping its calls.
 
 export interface Participant { peer: string; name: string; state: string; level: number; me?: boolean; muted?: boolean }
 
@@ -29,16 +31,27 @@ export class AudioSession {
     this.context = new AudioContext();
     this.participants.set(this.peerId, { peer: this.peerId, name: this.name + ' (you)', state: 'connected', level: 0, me: true });
     this.meter(this.peerId, this.local);
+    await this.open();
+    this.timer = window.setInterval(() => this.levels(), 120);
+    this.onChange(this);
+    addEventListener('pagehide', this.goodbye);
+  }
+
+  private reconnecting = false;
+  private async open() {
     const response = await fetch(`/api/audio/${this.id}/stream?peer=${this.peerId}&name=${encodeURIComponent(this.name)}`, { signal: this.abort.signal });
     if (!response.ok || !response.body) {
       const error = await response.json().catch(() => ({}));
       this.leave();
       throw new Error(error.error || 'Could not join this session.');
     }
-    this.timer = window.setInterval(() => this.levels(), 120);
-    this.onChange(this);
     void this.read(response.body);
   }
+
+  /** Tell the others right away when the tab closes. */
+  private goodbye = () => {
+    navigator.sendBeacon?.(`/api/audio/${this.id}/leave`, new Blob([JSON.stringify({ peer: this.peerId })], { type: 'application/json' }));
+  };
 
   private async read(body: ReadableStream<Uint8Array>) {
     const reader = body.getReader(), decoder = new TextDecoder();
@@ -56,13 +69,20 @@ export class AudioSession {
         }
       }
     } catch { /* left or network dropped */ }
-    if (!this.abort.signal.aborted) { this.leave(); this.onChange(this, 'Disconnected from the session.'); }
+    if (this.abort.signal.aborted) return;
+    if (this.reconnecting) {
+      this.reconnecting = false;
+      try { await this.open(); return; } catch { /* fall through */ }
+    }
+    this.leave(); this.onChange(this, 'Disconnected from the session.');
   }
 
   private async handle(event: string, data: any) {
-    if (event === 'welcome') {
-      // The newcomer calls everyone already in the room.
-      for (const { peer, name } of data.peers) { this.add(peer, name); await this.call(peer); }
+    if (event === 'reconnect') {
+      this.reconnecting = true;
+    } else if (event === 'welcome') {
+      // The newcomer calls everyone already in the room (after a reconnect, only people it has no call with).
+      for (const { peer, name } of data.peers) { if (this.peers.has(peer)) continue; this.add(peer, name); await this.call(peer); }
     } else if (event === 'join') {
       this.add(data.peer, data.name);
     } else if (event === 'leave') {
@@ -169,6 +189,8 @@ export class AudioSession {
   }
 
   leave() {
+    removeEventListener('pagehide', this.goodbye);
+    if (!this.abort.signal.aborted) this.goodbye();
     this.abort.abort();
     clearInterval(this.timer);
     for (const peer of [...this.peers.keys()]) this.drop(peer);

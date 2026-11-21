@@ -16,6 +16,8 @@
     "@deck.gl/mapbox": "9.4.1",
     "@nexconn/chat": "26.5.1",
     "@nexconn/engine": "26.5.1",
+    "@upstash/redis": "^1.41.0",
+    "ioredis": "^6.0.0",
     "maplibre-gl": "4.7.1",
     "pmtiles": "^4.5.0",
     "three": "^0.181.0"

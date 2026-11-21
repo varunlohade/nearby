@@ -22,7 +22,7 @@ type AskEvent =
   | { type: 'ask_location'; question: string; options: string[] }
   | { type: 'spot'; spot: Spot }
   | { type: 'reviews'; reviews: PlaceReviews }
-  | { type: 'answer'; answer: string; mode: 'claude' | 'guide'; note?: string }
+  | { type: 'answer'; answer: string; mode: 'claude' | 'guide' | 'blocked'; note?: string }
   | { type: 'error'; error: string };
 
 interface AskOptions {
@@ -304,7 +304,7 @@ export function mountAsk(options: AskOptions) {
       case 'answer':
         body.innerHTML = richText(event.answer);
         $('.ask-source').textContent = 'Live OpenStreetMap data' + (route ? ' · walking route on real paths' : '') +
-          (event.mode === 'claude' ? ' · Claude can move the map' : event.note ? ` · ${event.note}, built-in guide` : ' · built-in guide');
+          (event.mode === 'claude' ? ' · Claude can move the map' : event.mode === 'blocked' ? ` · ${event.note ?? 'stopped by the safety check'}` : event.note ? ` · ${event.note}, built-in guide` : ' · built-in guide');
         history.push({ role: 'user', text: question }, { role: 'assistant', text: event.answer });
         history = history.slice(-6);
         if (!cameraTaken && (pins.length || route)) requestAnimationFrame(fitAll);
