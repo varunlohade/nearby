@@ -125,7 +125,8 @@ export function mountCreate(options: CreateOptions) {
     card.innerHTML = `
       <header><span class="create-kicker">Create here</span><button type="button" class="create-x" aria-label="Close">×</button></header>
       <p class="create-where">Finding this spot…</p>
-      <div class="create-choices">${(Object.keys(KINDS) as (keyof typeof KINDS)[]).map(k => `
+      <div class="create-choices">
+        <button type="button" class="create-choice kind-community" data-community><i><svg viewBox="0 0 24 24"><circle cx="8" cy="9" r="3"/><circle cx="16" cy="9" r="3"/><path d="M2.5 20a5.5 5.5 0 0 1 11 0M10.5 20a5.5 5.5 0 0 1 11 0"/></svg></i><span><b>Start a community</b><small>A lasting group for neighbours, with a board and requests</small></span></button>${(Object.keys(KINDS) as (keyof typeof KINDS)[]).map(k => `
         <button type="button" class="create-choice kind-${k}" data-kind="${k}"><i>${KINDS[k].icon}</i><span><b>${KINDS[k].verb}</b><small>${KINDS[k].hint}</small></span></button>`).join('')}
       </div>`;
     let where = '';
@@ -134,6 +135,11 @@ export function mountCreate(options: CreateOptions) {
     }).catch(() => { const p = card.querySelector('.create-where'); if (p) p.textContent = ''; });
     card.querySelector<HTMLButtonElement>('.create-x')!.onclick = closePopup;
     card.querySelectorAll<HTMLButtonElement>('[data-kind]').forEach(b => { b.onclick = () => form(b.dataset.kind as Created['kind'], at, () => where); });
+    // Communities live in src/community/community.ts; hand the spot over.
+    card.querySelector<HTMLButtonElement>('[data-community]')!.onclick = () => {
+      closePopup();
+      document.dispatchEvent(new CustomEvent('nearby:create-community', { detail: { lat: at.lat, lng: at.lng, where } }));
+    };
     show(at, card, 'create-popup');
     const pin = document.createElement('div');
     pin.className = 'create-spot';

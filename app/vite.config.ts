@@ -3,6 +3,10 @@ import { placesApi } from './server/places';
 import { lumaApi } from './server/luma';
 import { defineConfig, loadEnv } from 'vite';
 import { nexconnApi } from './server/nexconn';
+import { agentsApi } from './server/agents';
+import { communitiesApi } from './server/communities';
+import { configureGuard } from './server/guard';
+import { configureIdentity } from './server/identity';
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '..', '');
@@ -12,13 +16,17 @@ export default defineConfig(({ mode }) => {
   const api = nexconnApi({ appKey, secret, host });
   const ask = askApi(env.ANTHROPIC_API_KEY ?? '', { id: env.REDDIT_CLIENT_ID, secret: env.REDDIT_CLIENT_SECRET });
   const places = placesApi();
+  configureIdentity(env.IDENTITY_SECRET || secret);
+  configureGuard(env.ANTHROPIC_API_KEY ?? '');
+  const communities = communitiesApi();
+  const agents = agentsApi();
   return {
     envDir: '..',
     plugins: [
       {
         name: 'nexconn-api',
-        configureServer(server) { server.middlewares.use(api); server.middlewares.use(lumaApi); server.middlewares.use(ask); server.middlewares.use(places); },
-        configurePreviewServer(server) { server.middlewares.use(api); server.middlewares.use(lumaApi); server.middlewares.use(ask); server.middlewares.use(places); },
+        configureServer(server) { for (const m of [api, lumaApi, ask, places, communities, agents]) server.middlewares.use(m); },
+        configurePreviewServer(server) { for (const m of [api, lumaApi, ask, places, communities, agents]) server.middlewares.use(m); },
       },
     ],
   };

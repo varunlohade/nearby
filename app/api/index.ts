@@ -5,15 +5,23 @@ import { askApi } from '../server/ask.js';
 import { lumaApi } from '../server/luma.js';
 import { nexconnApi } from '../server/nexconn.js';
 import { placesApi } from '../server/places.js';
+import { agentsApi } from '../server/agents.js';
+import { communitiesApi } from '../server/communities.js';
+import { configureGuard } from '../server/guard.js';
+import { configureIdentity } from '../server/identity.js';
 
 type Handler = (req: IncomingMessage, res: ServerResponse, next: (error?: unknown) => void) => unknown;
 
 const env = process.env;
+configureIdentity(env.IDENTITY_SECRET || env.NEXCONN_APP_SECRET || '');
+configureGuard(env.ANTHROPIC_API_KEY ?? '');
 const handlers: Handler[] = [
   nexconnApi({ appKey: env.NEXCONN_APP_KEY ?? '', secret: env.NEXCONN_APP_SECRET ?? '', host: env.NEXCONN_API_HOST || 'api.sg-light-api.com' }),
   lumaApi,
   askApi(env.ANTHROPIC_API_KEY ?? '', { id: env.REDDIT_CLIENT_ID, secret: env.REDDIT_CLIENT_SECRET }),
   placesApi(),
+  communitiesApi(),
+  agentsApi(),
 ];
 
 export default async function handler(req: IncomingMessage, res: ServerResponse) {

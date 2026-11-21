@@ -3,7 +3,7 @@
 // The handshake stream ends before the server's time limit with a "reconnect"
 // event; the session then reopens it with the same peer id, keeping its calls.
 
-export interface Participant { peer: string; name: string; state: string; level: number; me?: boolean; muted?: boolean }
+export interface Participant { peer: string; name: string; state: string; level: number; me?: boolean; muted?: boolean; role?: 'speaker' | 'listener' }
 
 const ICE: RTCConfiguration = { iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }] };
 
@@ -20,17 +20,31 @@ export class AudioSession {
   private abort = new AbortController();
   private timer = 0;
 
-  constructor(private id: string, private name: string, private onChange: (session: AudioSession, note?: string) => void) {}
+  private volume = 1;
+
+  /** mode 'listen' joins receive-only: no microphone, and everyone sees "(listening)" next to the name. */
+  constructor(private id: string, private name: string, private onChange: (session: AudioSession, note?: string) => void,
+    readonly mode: 'speak' | 'listen' = 'speak') {}
+
+  /** Playback volume for everyone in the session, 0..1 (used for distance fading). */
+  setVolume(value: number) {
+    this.volume = Math.max(0, Math.min(1, value));
+    for (const player of this.players.values()) player.volume = this.volume;
+  }
 
   async join() {
-    try {
-      this.local = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
-    } catch {
-      throw new Error('Microphone access is needed to join. Allow it in your browser and try again.');
+    const listening = this.mode === 'listen';
+    if (!listening) {
+      try {
+        this.local = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+      } catch {
+        throw new Error('Microphone access is needed to join. Allow it in your browser and try again.');
+      }
     }
     this.context = new AudioContext();
-    this.participants.set(this.peerId, { peer: this.peerId, name: this.name + ' (you)', state: 'connected', level: 0, me: true });
-    this.meter(this.peerId, this.local);
+    this.participants.set(this.peerId, { peer: this.peerId, name: this.name + (listening ? ' (listening, you)' : ' (you)'),
+      state: 'connected', level: 0, me: true, role: listening ? 'listener' : 'speaker' });
+    if (this.local) this.meter(this.peerId, this.local);
     await this.open();
     this.timer = window.setInterval(() => this.levels(), 120);
     this.onChange(this);
@@ -39,7 +53,8 @@ export class AudioSession {
 
   private reconnecting = false;
   private async open() {
-    const response = await fetch(`/api/audio/${this.id}/stream?peer=${this.peerId}&name=${encodeURIComponent(this.name)}`, { signal: this.abort.signal });
+    const role = this.mode === 'listen' ? '&role=listener' : '';
+    const response = await fetch(`/api/audio/${this.id}/stream?peer=${this.peerId}&name=${encodeURIComponent(this.name)}${role}`, { signal: this.abort.signal });
     if (!response.ok || !response.body) {
       const error = await response.json().catch(() => ({}));
       this.leave();
@@ -82,9 +97,15 @@ export class AudioSession {
       this.reconnecting = true;
     } else if (event === 'welcome') {
       // The newcomer calls everyone already in the room (after a reconnect, only people it has no call with).
-      for (const { peer, name } of data.peers) { if (this.peers.has(peer)) continue; this.add(peer, name); await this.call(peer); }
+      // Listeners only call speakers: two listeners have nothing to send each other.
+      for (const { peer, name, role } of data.peers) {
+        if (this.peers.has(peer)) continue;
+        this.add(peer, name, role);
+        if (this.mode === 'listen' && role === 'listener') continue;
+        await this.call(peer);
+      }
     } else if (event === 'join') {
-      this.add(data.peer, data.name);
+      this.add(data.peer, data.name, data.role);
     } else if (event === 'leave') {
       this.drop(data.peer);
     } else if (event === 'signal') {
@@ -93,8 +114,9 @@ export class AudioSession {
     this.onChange(this);
   }
 
-  private add(peer: string, name: string) {
-    if (!this.participants.has(peer)) this.participants.set(peer, { peer, name, state: 'connecting', level: 0 });
+  private add(peer: string, name: string, role: 'speaker' | 'listener' = 'speaker') {
+    const idle = this.mode === 'listen' && role === 'listener';
+    if (!this.participants.has(peer)) this.participants.set(peer, { peer, name, state: idle ? 'listening' : 'connecting', level: 0, role });
   }
 
   private connection(peer: string) {
@@ -111,7 +133,7 @@ export class AudioSession {
     pc.ontrack = ({ streams }) => {
       const stream = streams[0];
       let player = this.players.get(peer);
-      if (!player) { player = new Audio(); player.autoplay = true; this.players.set(peer, player); }
+      if (!player) { player = new Audio(); player.autoplay = true; player.volume = this.volume; this.players.set(peer, player); }
       player.srcObject = stream;
       void player.play().catch(() => undefined);
       this.meter(peer, stream);
@@ -121,6 +143,8 @@ export class AudioSession {
 
   private async call(peer: string) {
     const pc = this.connection(peer);
+    // Without a microphone track the offer needs an explicit receive-only audio line.
+    if (!this.local) pc.addTransceiver('audio', { direction: 'recvonly' });
     await pc.setLocalDescription(await pc.createOffer());
     await this.send(peer, { sdp: pc.localDescription });
   }

@@ -4,7 +4,9 @@ import './free-roam.css';
 import { StreetAtlas } from './world/atlas';
 import { mountAsk } from './ask/ask';
 import { mountCreate, type Created } from './create/create';
+import { mountCommunities } from './community/community';
 import { chatPanel as createChatPanel } from './chat/panel';
+import { openRoam } from './roam/roam';
 import { EarthExperience, type Activity, type Place } from './world/earth';
 
 if (new URLSearchParams(location.search).has('instant')) document.documentElement.classList.add('instant');
@@ -356,6 +358,10 @@ async function start() {
     openChat: (id, title, kind) => { closeEvent(); void chat.openRoom(id, title, kind); setChatOpen(true); },
     onNearby: items => { if (!place) return; createdNear = items.map(createdActivity); refreshListings(); },
   });
+  mountCommunities({
+    map: () => atlas['map'], place: () => place, user: () => chat.user,
+    openChat: (id, title, kind) => { closeEvent(); void chat.openRoom(id, title, kind); setChatOpen(true); },
+  });
   world = new EarthExperience(canvas);
   world.enableNavigation(canvas, (lat,lng) => { void landOnGlobe(lat,lng); });
   if (new URLSearchParams(location.search).has('globe')) {
@@ -412,8 +418,8 @@ function setRoam(active: boolean) {
 $('#enter-roam').onclick = () => {
   closeEvent();
   setChatOpen(false);
-  setRoam(true);
-  $('#leave-roam').focus({preventScroll: true});
+  // Free Roam: drive, walk or fly through this area (src/roam).
+  void openRoam({ map: atlas['map'], place, activities, user: chat.user, onExit: () => $('#enter-roam').focus({preventScroll: true}) });
 };
 $('#leave-roam').onclick = () => {
   setRoam(false);

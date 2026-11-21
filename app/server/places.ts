@@ -25,7 +25,8 @@ export interface Created {
   start?: number; category?: string; by: string; created: number; expires: number; live?: number;
 }
 
-const MAX_AUDIO = 6;
+const MAX_AUDIO = 6;          // speakers
+const MAX_PEERS = 12;         // speakers + listen-only peers
 const PEER_TIMEOUT = 25000;   // a peer that has not polled for this long has left
 const POLL_MS = 800;
 const STREAM_MS = 270000;     // end the stream before Vercel's 300 s limit; the client reconnects
@@ -40,7 +41,8 @@ async function load(): Promise<Created[]> {
 }
 
 // ---------------------------------------------------------------- audio relay
-interface PeerInfo { name: string; seen: number }
+interface PeerInfo { name: string; seen: number; role?: 'speaker' | 'listener' }
+const isListener = (info: PeerInfo) => info.role === 'listener';
 const peersKey = (id: string) => `aud:${id}:peers`;
 const inboxKey = (id: string, peer: string) => `aud:${id}:in:${peer}`;
 async function peersOf(id: string) {
@@ -51,7 +53,10 @@ async function peersOf(id: string) {
   gone.forEach(p => delete all[p]);
   return all;
 }
-async function live(id: string) { return Object.keys(await peersOf(id)).length; }
+async function counts(id: string) {
+  const all = Object.values(await peersOf(id));
+  return { live: all.filter(p => !isListener(p)).length, listening: all.filter(isListener).length };
+}
 function push(res: ServerResponse, event: string, data: unknown) { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); }
 
 // ---------------------------------------------------------------- helpers
@@ -96,8 +101,9 @@ export function placesApi() {
         const now = Date.now();
         const inBox = (c: Created) => c.lat >= s && c.lat <= n && (w <= e ? c.lng >= w && c.lng <= e : c.lng >= w || c.lng <= e);
         const inView = (await load()).filter(inBox).slice(-300);
-        const counts = new Map(await Promise.all(inView.filter(c => c.kind === 'audio').map(async c => [c.id, await live(c.id)] as const)));
-        const list = inView.filter(c => c.expires > now || (counts.get(c.id) ?? 0) > 0).map(c => ({ ...c, live: c.kind === 'audio' ? counts.get(c.id) ?? 0 : undefined }));
+        const people = new Map(await Promise.all(inView.filter(c => c.kind === 'audio').map(async c => [c.id, await counts(c.id)] as const)));
+        const list = inView.filter(c => c.expires > now || (people.get(c.id)?.live ?? 0) > 0)
+          .map(c => ({ ...c, live: c.kind === 'audio' ? people.get(c.id)?.live ?? 0 : undefined, listening: c.kind === 'audio' ? people.get(c.id)?.listening ?? 0 : undefined }));
         return send(200, { items: list });
       }
 
@@ -135,17 +141,26 @@ export function placesApi() {
         const item = (await load()).find(c => c.id === id && c.kind === 'audio');
         if (!item) return send(404, { error: 'This audio session has ended.' });
         if (action === 'stream' && req.method === 'GET') {
-          const peer = clean(url.searchParams.get('peer'), 40), name = clean(url.searchParams.get('name'), 40) || 'Neighbour';
+          const peer = clean(url.searchParams.get('peer'), 40);
+          // Listen-only peers receive audio but never send it; everyone sees them as "(listening)".
+          const role: 'speaker' | 'listener' = url.searchParams.get('role') === 'listener' ? 'listener' : 'speaker';
+          const base = clean(url.searchParams.get('name'), 40) || 'Neighbour';
+          const name = role === 'listener' ? base + ' (listening)' : base;
           if (!/^[a-z0-9-]{8,40}$/i.test(peer)) return send(400, { error: 'Bad peer id' });
           const store = getStore();
           let known = await peersOf(id);
-          if (Object.keys(known).length >= MAX_AUDIO && !known[peer]) return send(409, { error: `This session is full (${MAX_AUDIO} people).` });
+          if (!known[peer]) {
+            const speakers = Object.values(known).filter(p => !isListener(p)).length;
+            if (Object.keys(known).length >= MAX_PEERS) return send(409, { error: `This session is full (${MAX_PEERS} people).` });
+            if (role === 'speaker' && speakers >= MAX_AUDIO) return send(409, { error: `This session is full (${MAX_AUDIO} speakers). You can still listen.` });
+          }
           const rejoining = !!known[peer];
-          await store.hset(peersKey(id), peer, { name, seen: Date.now() });
+          const me: PeerInfo = { name, seen: Date.now(), role };
+          await store.hset(peersKey(id), peer, me);
           if (item.expires < Date.now() + 3600000) await store.hset('places', id, { ...item, expires: Date.now() + 3600000 });
           res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
           delete known[peer];
-          push(res, 'welcome', { rejoin: rejoining, peers: Object.entries(known).map(([p, info]) => ({ peer: p, name: info.name })) });
+          push(res, 'welcome', { rejoin: rejoining, peers: Object.entries(known).map(([p, info]) => ({ peer: p, name: info.name, role: info.role ?? 'speaker' })) });
           let open = true;
           req.on('close', () => { open = false; });
           const started = Date.now();
@@ -154,10 +169,10 @@ export function placesApi() {
           while (open && Date.now() - started < STREAM_MS) {
             await new Promise(resolve => setTimeout(resolve, POLL_MS));
             if (!open) break;
-            await store.hset(peersKey(id), peer, { name, seen: Date.now() });
+            await store.hset(peersKey(id), peer, { ...me, seen: Date.now() });
             const [now, inbox] = await Promise.all([peersOf(id), store.drain<{ from: string; data: unknown }>(inboxKey(id, peer))]);
             delete now[peer];
-            for (const p of Object.keys(now)) if (!known[p]) push(res, 'join', { peer: p, name: now[p].name });
+            for (const p of Object.keys(now)) if (!known[p]) push(res, 'join', { peer: p, name: now[p].name, role: now[p].role ?? 'speaker' });
             for (const p of Object.keys(known)) if (!now[p]) push(res, 'leave', { peer: p });
             known = now;
             for (const message of inbox) push(res, 'signal', message);

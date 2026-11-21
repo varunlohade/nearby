@@ -2,6 +2,7 @@
 .kind-room { --kind: #75c4ee; }
 .kind-event { --kind: var(--accent, #f5bd52); }
 .kind-audio { --kind: #f495ae; }
+.kind-community { --kind: #8ff0d8; }
 
 /* "+ Create" mode */
 .create-bar {

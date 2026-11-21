@@ -21,6 +21,12 @@ export interface Store {
   rpush(key: string, value: unknown, ttlSeconds: number): Promise<void>;
   /** Read and clear a list in one step. */
   drain<T>(key: string): Promise<T[]>;
+  /** Append to a list and keep only its newest `cap` items. */
+  pushCapped(key: string, value: unknown, cap: number): Promise<void>;
+  /** The newest `count` items of a list, oldest first. */
+  tail<T>(key: string, count: number): Promise<T[]>;
+  hget<T>(key: string, field: string): Promise<T | null>;
+  hlen(key: string): Promise<number>;
 }
 
 function redisStore(redis: Redis): Store {
@@ -41,6 +47,10 @@ function redisStore(redis: Redis): Store {
       const [items] = await redis.multi().lrange(key, 0, -1).del(key).exec<[T[], number]>();
       return items ?? [];
     },
+    async pushCapped(key, value, cap) { await redis.multi().rpush(key, value).ltrim(key, -cap, -1).exec(); },
+    async tail<T>(key: string, count: number) { return ((await redis.lrange<T>(key, -count, -1)) ?? []) as T[]; },
+    async hget<T>(key: string, field: string) { return ((await redis.hget<T>(key, field)) ?? null) as T | null; },
+    async hlen(key) { return Number(await redis.hlen(key)); },
   };
 }
 
@@ -68,6 +78,10 @@ function tcpStore(redis: IORedis): Store {
       const result = await redis.multi().lrange(key, 0, -1).del(key).exec();
       return ((result?.[0]?.[1] as string[]) ?? []).map(v => dec<T>(v) as T);
     },
+    async pushCapped(key, value, cap) { await redis.multi().rpush(key, enc(value)).ltrim(key, -cap, -1).exec(); },
+    async tail<T>(key: string, count: number) { return (await redis.lrange(key, -count, -1)).map(v => dec<T>(v) as T); },
+    async hget<T>(key: string, field: string) { return dec<T>(await redis.hget(key, field)); },
+    async hlen(key) { return redis.hlen(key); },
   };
 }
 
@@ -110,6 +124,14 @@ function memoryStore(): Store {
       values.delete(key);
       return list;
     },
+    async pushCapped(key, value, cap) {
+      const list = (live(key)?.value as unknown[]) ?? [];
+      list.push(structuredClone(value));
+      put(key, list.slice(-cap));
+    },
+    async tail<T>(key: string, count: number) { return structuredClone(((live(key)?.value as T[]) ?? []).slice(-count)); },
+    async hget<T>(key: string, field: string) { return structuredClone(((live(key)?.value as Record<string, T>) ?? {})[field] ?? null); },
+    async hlen(key) { return Object.keys((live(key)?.value as object) ?? {}).length; },
   };
 }
 
