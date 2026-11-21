@@ -1,286 +1,591 @@
 import './styles.css';
-import { CITY } from './config';
-import { areaAt, loadAreas, ringAround, saveBuiltArea, slug, snapToArea } from './areas';
-import { createChat, roomIdFor, type ChatMessage, type ChatService } from './chat';
-import type { MapView } from './map/types';
-import type { Area, Happening, LatLng } from './types';
-import { loadUser, saveUser, guestId, type User } from './user';
-import { ICON, KIND, LOGO, av, esc, stack } from './ui/icons';
+import './atlas-hud.css';
+import './free-roam.css';
+import { StreetAtlas } from './world/atlas';
+import { mountAsk } from './ask/ask';
+import { mountCreate, type Created } from './create/create';
+import { chatPanel as createChatPanel } from './chat/panel';
+import { EarthExperience, type Activity, type Place } from './world/earth';
 
-const MOBILE = innerWidth < 600;
-const $ = <T extends HTMLElement = HTMLElement>(sel: string) => document.querySelector(sel) as T;
-const h = (html: string) => { const t = document.createElement('template'); t.innerHTML = html.trim(); return t.content.firstElementChild as HTMLElement; };
+if (new URLSearchParams(location.search).has('instant')) document.documentElement.classList.add('instant');
 
-let areas: Area[] = loadAreas(CITY);
-let user: User | null = loadUser();
-const byId = (id: string) => areas.find((a) => a.id === id);
+const $ = <T extends HTMLElement>(selector: string) => document.querySelector(selector) as T;
+const escapeHtml = (value: string) => value.replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]!);
 
-// ---------- shell ----------
-document.body.append(
-  h(`<div class="side">
-      <div class="card brand"><div class="wordmark">${LOGO}nearby</div><span class="city">${CITY.name}</span><button class="me-btn" data-act="signin" aria-label="Sign in"></button></div>
-      <div class="card feed"><div class="feed-head"><h2>What's happening</h2><small class="num">live</small></div><div class="rows"></div></div>
-    </div>`),
-  h(`<div class="mtop"><div class="wordmark">${LOGO}nearby</div><button class="me-btn" data-act="signin" aria-label="Sign in"></button></div>`),
-  h(`<div class="card drawer"><div class="grab"></div><div class="feed-head"><h2>What's happening</h2><small>live</small></div><div class="rows"></div></div>`),
-  h(`<div class="badges"><span class="badge" id="chat-badge"></span></div>`),
-  h(`<div class="hint">Tap an empty spot to build your neighbourhood</div>`),
-);
+const canvas = $('#world') as HTMLCanvasElement;
+const arrival = $('#arrival');
+const arrivalTitle = $('#arrival-title');
+const arrivalCopy = $('#arrival-copy');
+const arrivalStatus = $('#arrival-status');
+const progress = $('#progress');
+const progressNumber = $('#progress-number');
+const placePill = $('#place-pill');
+const placePillLabel = $('#place-pill-label');
+const globeButton = $('#globe-button');
+const localityTitle = $('#locality-title');
+const activityPanel = $('#activity-panel');
+const activityList = $('#activity-list');
+const chatPanel = $('#chat-panel');
+const messageInput = $('#message-input') as HTMLInputElement;
+const eventSheet = $('#event-sheet');
+const placeCoords = $('#place-pill-coords');
+const hud = $('#hud');
+const mobileChat = $('#mobile-chat');
+const locationDialog = $('#location-dialog') as HTMLDialogElement;
+const searchInput = $('#location-search') as HTMLInputElement;
+const searchResults = $('#search-results');
 
-function renderMe() {
-  document.querySelectorAll<HTMLButtonElement>('.me-btn').forEach((b) => {
-    b.textContent = user ? user.name.slice(0, 2).toUpperCase() : 'Sign in';
-    b.classList.toggle('out', !user);
+let world: EarthExperience;
+let atlas: StreetAtlas;
+let place: Place;
+let activities: Activity[] = [];
+let metadata: Record<string,string> = {};
+let areaId = '';
+let previewId = '';
+let rsvpBusy = false;
+const chat = createChatPanel(applyRoomState, updateAttendance);
+function setProgress(value: number, status: string) {
+  const pct = Math.max(0, Math.min(100, Math.round(value)));
+  progress.style.width = `${pct}%`;
+  progressNumber.textContent = `${String(pct).padStart(2, '0')}%`;
+  arrivalStatus.textContent = status;
+}
+
+async function detectPlace(): Promise<Place> {
+  const providers = [
+    { url: 'https://freeipapi.com/api/json', read: (data: any) => ({ lat: data.latitude, lng: data.longitude, city: data.cityName, region: data.regionName, country: data.countryName }) },
+    { url: 'https://ipwho.is/', read: (data: any) => ({ lat: data.latitude, lng: data.longitude, city: data.city, region: data.region, country: data.country }) },
+  ];
+  for (const provider of providers) {
+    try {
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 2200);
+      const response = await fetch(provider.url, {signal: controller.signal}).finally(() => clearTimeout(timeout));
+      const data = await response.json();
+      const found = provider.read(data);
+      if (!response.ok || data.success === false || !Number.isFinite(found.lat) || Math.abs(found.lat) > 85.0511 || !Number.isFinite(found.lng) || Math.abs(found.lng) > 180 || !(found.city || found.region || found.country)) throw new Error('IP location unavailable');
+      return {
+        lat: found.lat, lng: found.lng,
+        locality: found.city || found.region || found.country,
+        city: found.city || found.region || found.country,
+        region: found.region || '', country: found.country || '', source: 'network',
+      };
+    } catch { /* try the next provider */ }
+  }
+  return { lat: 17.466, lng: 78.357, locality: 'Kondapur', city: 'Hyderabad', region: 'Telangana', country: 'India', source: 'fallback' };
+}
+
+const hash = (text: string) => [...text].reduce((n, char) => Math.imul(n ^ char.charCodeAt(0), 2654435761), 2166136261) >>> 0;
+interface LumaListing {
+  id: string; title: string; url: string; cover?: string; count: number | null;
+  lat: number; lng: number; venue: string; start: string; distance: number;
+}
+let lumaEvents: Activity[] = [];
+// Rooms, events and audio sessions people created on the map near this area (see src/create).
+let createdNear: Activity[] = [];
+let create: ReturnType<typeof mountCreate> | undefined;
+function createdActivity(item: Created): Activity {
+  const x = 111.32 * ((item.lng - place.lng + 540) % 360 - 180) * Math.cos(place.lat * Math.PI / 180), z = 111.32 * (place.lat - item.lat);
+  const time = item.kind === 'event' && item.start ? new Date(item.start).toLocaleString([], {dateStyle:'medium', timeStyle:'short'})
+    : item.kind === 'audio' ? (item.live ? 'Live audio · ' + item.live + ' talking' : 'Audio session') : 'Chat room · open now';
+  return {id:item.id, kind:item.kind === 'event' ? (item.category || 'social') : item.kind === 'audio' ? 'talk' : 'social', title:item.title,
+    description:'', place:item.place, time, people:item.live ?? 0, distance:Math.hypot(x,z), x, z, venuePoint:[item.lng, item.lat]};
+}
+let listingStatus = '';
+async function loadLuma(current: Place) {
+  try {
+    const response = await fetch('/api/luma/nearby?lat=' + current.lat.toFixed(2) + '&lng=' + current.lng.toFixed(2));
+    if (!response.ok) throw new Error();
+    const {events} = await response.json() as {events:LumaListing[]};
+    if (current !== place) return;
+    lumaEvents = events.map(e => ({id:e.id, title:e.title, kind:'social', description:'', place:e.venue,
+      time:new Date(e.start).toLocaleString([], {dateStyle:'medium',timeStyle:'short'}), people:e.count ?? 0, distance:e.distance,
+      x:0,z:0,venuePoint:[e.lng,e.lat],luma:{url:e.url, cover:e.cover,count:e.count}}));
+    listingStatus = lumaEvents.length ? 'Luma events within 50 km' : 'No public Luma venues within 50 km';
+  } catch {
+    if (current !== place) return;
+    listingStatus = 'Luma events unavailable';
+  }
+  refreshListings();
+}
+
+function iconFor(kind: string) {
+  const icons: Record<string, string> = {
+    talk: '<svg viewBox="0 0 24 24"><path d="M5 5h14v10H9l-4 4V5Z"/></svg>',
+    sport: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="m8 6 4 3 4-3M8 18l1-5-5-2m12 7-1-5 5-2M9 13h6"/></svg>',
+    culture: '<svg viewBox="0 0 24 24"><path d="M9 18V5l10-2v13M9 9l10-2"/><circle cx="6" cy="18" r="3"/><circle cx="16" cy="16" r="3"/></svg>',
+    social: '<svg viewBox="0 0 24 24"><circle cx="8" cy="9" r="3"/><circle cx="17" cy="8" r="2"/><path d="M3 19c0-3 2-5 5-5s5 2 5 5m1-5c3 0 5 2 5 5"/></svg>',
+    wellness: '<svg viewBox="0 0 24 24"><path d="M12 21c-4-3-7-6-7-11a7 7 0 0 1 14 0c0 5-3 8-7 11Z"/><path d="M8 12c3 0 5-2 5-5 2 2 3 4 3 6"/></svg>',
+    help: '<svg viewBox="0 0 24 24"><path d="M12 21s-8-4.5-8-11a4.5 4.5 0 0 1 8-2.8A4.5 4.5 0 0 1 20 10c0 6.5-8 11-8 11Z"/></svg>',
+  };
+  return icons[kind] || icons.talk;
+}
+
+const peopleIcon = '<svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.2"/><path d="M3 19.5a6 6 0 0 1 12 0M16 4.8a3.2 3.2 0 0 1 0 6.4M18 14a6 6 0 0 1 3 5.5"/></svg>';
+const kindLabel: Record<string, string> = { talk: 'Talk', sport: 'Sport', culture: 'Music', social: 'Meetup', wellness: 'Outdoors', help: 'Community' };
+const formatCoords = (lat: number, lng: number) => `${Math.abs(lat).toFixed(4)}° ${lat >= 0 ? 'N' : 'S'} · ${Math.abs(lng).toFixed(4)}° ${lng >= 0 ? 'E' : 'W'}`;
+
+function renderActivities(landing = true) {
+  activityList.innerHTML = activities.map((item, index) => `
+    <button class="activity-item type-${item.kind}" type="button" data-event="${item.id}" style="--delay:${120 + index * 60}ms">
+      <span class="kind-icon">${iconFor(item.kind)}</span>
+      <span class="activity-copy"><b>${escapeHtml(item.title)}</b><small class="mono">${escapeHtml(item.time)} · ${item.distance.toFixed(1)} km</small></span>
+      <span class="going mono">${item.luma?.count === null ? '' : peopleIcon + item.people}</span>
+    </button>`).join('');
+
+  // Created items draw their own pins (src/create), so the atlas skips them.
+  atlas.show(place, activities.filter(item => !create?.has(item.id)), item => {
+    const pin = document.createElement('button');
+    pin.type = 'button';
+    pin.className = `blip type-${item.kind}`;
+    pin.dataset.event = item.id;
+    pin.setAttribute('aria-label', item.title);
+    pin.innerHTML = `<span class="blip-face">${iconFor(item.kind)}</span><span class="blip-name">${item.luma ? 'Luma' : kindLabel[item.kind]}</span>`;
+    return pin;
+  }, landing);
+
+  // Hovering a list row lights up its pin, and the other way round.
+  const setHot = (id: string | undefined, on: boolean) => {
+    if (!id) return;
+    document.querySelectorAll(`[data-event="${id}"]`).forEach((node) => node.classList.toggle('is-hot', on));
+  };
+  document.querySelectorAll<HTMLElement>('.activity-item, .blip').forEach((node) => {
+    node.addEventListener('mouseenter', () => setHot(node.dataset.event, true));
+    node.addEventListener('mouseleave', () => setHot(node.dataset.event, false));
   });
 }
-renderMe();
-document.addEventListener('click', (e) => {
-  const act = (e.target as HTMLElement).closest<HTMLElement>('[data-act]')?.dataset.act;
-  if (act === 'signin') openSignIn();
+
+function setActive(id: string | null) {
+  document.querySelectorAll('.is-active').forEach((node) => node.classList.remove('is-active'));
+  document.body.classList.toggle('waypoint-open', Boolean(id));
+  if (id) document.querySelectorAll(`[data-event="${id}"]`).forEach((node) => node.classList.add('is-active'));
+}
+
+let opener: HTMLElement | null = null;
+
+function openEvent(id: string, trigger: HTMLElement) {
+  if (create?.has(id)) { closeEvent(); setChatOpen(false); create.open(id); return; }
+  const event = activities.find((item) => item.id === id);
+  if (!event) return;
+  setChatOpen(false);
+  void chat.openArea();
+  previewId = id;
+  opener = trigger;
+  eventSheet.className = `event panel type-${event.kind}`;
+  $('#event-status').textContent = '';
+  $('#event-kind').textContent = event.luma ? 'Luma event' : kindLabel[event.kind] + ' / Hosted event';
+  $('#poster-title').textContent = event.luma ? '' : kindLabel[event.kind];
+  const photo = $('#event-image') as HTMLImageElement;
+  photo.src = event.luma?.cover || '/posters/' + event.kind + '.jpg';
+  const link = $<HTMLAnchorElement>('#luma-link');
+  link.hidden = !event.luma;
+  link.href = event.luma?.url || '';
+  $('#event-title').textContent = event.title;
+  $('#event-description').textContent = event.description;
+  $('#event-place').textContent = event.place;
+  $('#event-time').textContent = event.time;
+  $('#event-distance').textContent = `${event.distance.toFixed(1)} km`;
+  updateAttendance();
+  setActive(id);
+  atlas.focus(id, eventSheet);
+  $('#sheet-close').focus({preventScroll: true});
+}
+
+function closeEvent(restoreFocus = false) {
+  previewId = '';
+  eventSheet.classList.add('hidden');
+  atlas.closePreview();
+  $('#app').append(eventSheet);
+  setActive(null);
+  if (restoreFocus) opener?.focus({preventScroll: true});
+  opener = null;
+}
+
+function setChatOpen(open: boolean) {
+  chatPanel.classList.toggle('collapsed', !open);
+  document.body.classList.toggle('chat-open', open);
+  if (open) { closeEvent(); messageInput.focus({ preventScroll: true }); }
+}
+
+function updateAttendance() {
+  const item = activities.find(activity => activity.id === previewId);
+  if (!item) return;
+  const button = $<HTMLButtonElement>('#rsvp');
+  button.hidden = !!item.luma;
+  if (item.luma) {
+    $('#event-people').textContent = item.luma.count === null ? 'Guest count private' : item.people + ' attending';
+    $('#guest-names').textContent = '';
+    $('#event-guests').replaceChildren();
+    return;
+  }
+  const prefix = 'going_' + item.id + '_';
+  const confirmed = Object.entries(metadata).filter(([k,v]) => k.startsWith(prefix) && typeof v === 'string').map(([,name]) => name.slice(0,40));
+  const guests = confirmed.slice(0,3);
+  const count = confirmed.length + item.people;
+  $('#event-people').textContent = count + ' attending';
+  $('#guest-names').textContent = guests.join(', ') + (count > guests.length ? ' + ' + (count - guests.length) + ' more' : '');
+  $('#event-guests').replaceChildren(...guests.map(name => {
+    const avatar = document.createElement('span'); avatar.textContent = name[0]; return avatar;
+  }));
+  const going = Object.hasOwn(metadata,prefix + chat.user.userId);
+  button.disabled = !chat.areaReady || rsvpBusy;
+  button.setAttribute('aria-pressed', String(going));
+  button.textContent = going ? '✓ Going' : 'RSVP';
+}
+
+function hostedActivities(values: Record<string,string>): Activity[] {
+  const result: Activity[] = [];
+  for (const [id,raw] of Object.entries(values)) {
+    if (!/^event_[a-f0-9]{24}$/.test(id)) continue;
+    try {
+      const data = JSON.parse(raw);
+      if (typeof data.title !== 'string' || typeof data.venue !== 'string' || !Object.hasOwn(kindLabel,data.kind) ||
+          !Number.isFinite(data.lat) || Math.abs(data.lat) > 85.0511 || !Number.isFinite(data.lng) || Math.abs(data.lng) > 180 ||
+          !Number.isFinite(data.start) || data.start < Date.now() - 86400000) continue;
+      const x = 111.32 * ((data.lng-place.lng+540)%360-180) * Math.cos(place.lat*Math.PI/180);
+      const z = 111.32 * (place.lat-data.lat);
+      result.push({id,kind:data.kind,title:data.title.slice(0,75),place:data.venue.slice(0,70),description:'',people:0,
+        time:new Date(data.start).toLocaleString([], {dateStyle:'medium',timeStyle:'short'}),
+        venuePoint:[data.lng,data.lat], distance:Math.hypot(x,z), x,z});
+    } catch { /* Ignore entries from other clients that do not describe an event. */ }
+  }
+  return result.sort((a,b) => a.id.localeCompare(b.id));
+}
+
+function refreshListings() {
+  const hosted = hostedActivities(metadata);
+  activities = [...hosted,...createdNear,...lumaEvents];
+  renderActivities(false);
+  $('#activity-count').textContent = String(activities.length);
+  const made = hosted.length + createdNear.length;
+  $('#activity-caption').textContent = (made ? made + ' made here · ' : '') + listingStatus;
+  if (previewId && !activities.some(item => item.id === previewId)) closeEvent();
+  updateAttendance();
+}
+
+function applyRoomState(values: Record<string,string>) {
+  metadata = {...values};
+  if (JSON.stringify(hostedActivities(metadata)) !== JSON.stringify(activities.filter(item => !item.luma))) refreshListings();
+  else updateAttendance();
+}
+
+function connectArea(current: Place) {
+  const key = [current.country,current.region,current.city,current.locality].map(s => s.trim().normalize('NFKC').toLowerCase()).join('|');
+  areaId = 'nearby_' + hash(key).toString(36) + '_' + hash([...key].reverse().join('')).toString(36);
+  return chat.setArea({id:areaId, title:current.locality + ' chat'});
+}
+
+function selectPlace(nextPlace: Place, landing: boolean) {
+  setRoam(false);
+  place = nextPlace;
+  metadata = {};
+  lumaEvents = [];
+  createdNear = [];
+  activities = [];
+  create?.refresh();
+  listingStatus = 'Finding Luma events…';
+  $('#activity-caption').textContent = listingStatus;
+  $('#activity-count').textContent = '0';
+  renderActivities(landing);
+  void connectArea(place);
+  void loadLuma(place);
+}
+
+function showPlaceLabel() {
+  placePillLabel.textContent = place.locality;
+  localityTitle.textContent = place.locality;
+
+  $('#launcher-room').textContent = `${place.locality} chat`;
+  placeCoords.textContent = `${place.lat.toFixed(2)}°, ${place.lng.toFixed(2)}°`;
+  $('#hud-coords').textContent = place.source === 'fallback' ? 'Default area · change above' : [place.region, place.country].filter(Boolean).join(' / ');
+}
+
+async function landAt(nextPlace: Place) {
+  world.exploring = false;
+  document.body.classList.remove('orbit-explore');
+  selectPlace(nextPlace, true);
+  closeEvent();
+  globeButton.classList.add('hidden');
+  placePill.classList.add('hidden');
+  document.body.classList.remove('on-map', 'landing-map');
+  arrival.hidden = false;
+  arrival.classList.remove('hidden');
+  activityPanel.classList.add('hidden');
+  chatPanel.classList.add('hidden');
+  setChatOpen(false);
+  mobileChat.classList.add('hidden');
+  hud.classList.add('hidden');
+  eventSheet.classList.add('hidden');
+  $('#arrival-kicker').textContent = formatCoords(place.lat, place.lng);
+  arrivalTitle.innerHTML = `Landing in<br /><em>${escapeHtml(place.locality)}.</em>`;
+  const sourceLabel = place.source === 'network' ? 'network' : place.source === 'device' ? 'device' : place.source === 'search' ? 'search' : place.source === 'globe' ? 'globe selection' : 'default region';
+  arrivalCopy.textContent = place.source === 'fallback' ? 'Demo area · you can change it after landing' :
+    [place.city, place.region !== place.city ? place.region : '', sourceLabel].filter(Boolean).join(' · ');
+  setProgress(38, 'Aligning the globe');
+  await world.flyTo(place, (value, label) => {
+    setProgress(38 + value * 47, label);
+    // Start the street map's fade during the last stretch of the descent, so the
+    // globe and the map overlap instead of meeting at a plain frame.
+    if (value > 0.85) document.body.classList.add('landing-map');
+  });
+  setProgress(88, 'Opening the street map');
+  document.body.classList.add('landing-map');
+  await atlas.land();
+  setProgress(100, 'You’re here');
+  arrival.classList.add('hidden');
+  showPlaceLabel();
+  hud.classList.remove('hidden');
+  $('#activity-count').textContent = String(activities.length);
+  document.body.classList.add('on-map');
+  placePill.classList.remove('hidden');
+  globeButton.classList.remove('hidden');
+  activityPanel.classList.remove('hidden');
+  chatPanel.classList.remove('hidden');
+  mobileChat.classList.remove('hidden');
+  $('#attribution').classList.remove('hidden');
+  document.body.classList.remove('landing-map');
+}
+
+async function start() {
+  atlas = new StreetAtlas($('#street-atlas'), () => closeEvent());
+  // Ask about my neighbourhood. atlas['map'] reads the private MapLibre instance on purpose.
+  mountAsk({ map: () => atlas['map'], place: () => place, activities: () => activities, goTo: next => { void landAt(next); } });
+  // Create a chat room, event or audio session anywhere on the map.
+  create = mountCreate({
+    map: () => atlas['map'], place: () => place, user: () => chat.user,
+    openChat: (id, title, kind) => { closeEvent(); void chat.openRoom(id, title, kind); setChatOpen(true); },
+    onNearby: items => { if (!place) return; createdNear = items.map(createdActivity); refreshListings(); },
+  });
+  world = new EarthExperience(canvas);
+  world.enableNavigation(canvas, (lat,lng) => { void landOnGlobe(lat,lng); });
+  if (new URLSearchParams(location.search).has('globe')) {
+    await world.ready((v,label) => setProgress(v*100,label));
+    showExplorer(); return;
+  }
+  // Shared links (?at=lat,lng) land straight on that spot.
+  const at = new URLSearchParams(location.search).get('at')?.split(',').map(Number);
+  if (at?.length === 2 && at.every(Number.isFinite)) {
+    setProgress(8, 'Building Earth');
+    await world.ready((value, label) => setProgress(8 + value * 25, label));
+    await landAt(await placeAt(at[0], at[1]));
+    return;
+  }
+  setProgress(8, 'Building Earth');
+  const [detected] = await Promise.all([
+    detectPlace(),
+    world.ready((value, label) => setProgress(8 + value * 25, label)),
+  ]);
+  await landAt(detected);
+}
+
+document.addEventListener('click', (event) => {
+  const button = (event.target as HTMLElement).closest<HTMLElement>('[data-event]');
+  if (button?.dataset.event) openEvent(button.dataset.event, button);
+});
+$('#sheet-close').onclick = () => { closeEvent(true); atlas.home(); };
+$('#join-conversation').onclick = () => {
+  const item = activities.find(activity => activity.id === previewId);
+  if (item) { void chat.openEvent(item.id,item.title); setChatOpen(true); }
+};
+$('#rsvp').onclick = async () => {
+  const id = previewId;
+  const area = areaId;
+  const key = 'going_' + id + '_' + chat.user.userId;
+  rsvpBusy = true; updateAttendance();
+  try { await chat.write(key, Object.hasOwn(metadata,key) ? null : chat.user.name); }
+  catch (e) { if (previewId === id && area === areaId) $('#event-status').textContent = (e as Error).message; }
+  finally { rsvpBusy = false; updateAttendance(); }
+};
+$('#chat-close').onclick = () => { setChatOpen(false); void chat.openArea(); };
+mobileChat.onclick = () => { void chat.openArea(); setChatOpen(true); };
+addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape' || locationDialog.open || hostDialog.open || $<HTMLDialogElement>('#name-dialog').open) return;
+  if (!eventSheet.classList.contains('hidden')) closeEvent(true);
+  else if (!chatPanel.classList.contains('collapsed')) { setChatOpen(false); void chat.openArea(); }
+});
+function setRoam(active: boolean) {
+  atlas.toggleRoam(active);
+  document.body.classList.toggle('roaming', active);
+  $('#roam-controls').hidden = !active;
+  $('.district-meta').textContent = active ? 'Free roam' : 'Current area';
+}
+$('#enter-roam').onclick = () => {
+  closeEvent();
+  setChatOpen(false);
+  setRoam(true);
+  $('#leave-roam').focus({preventScroll: true});
+};
+$('#leave-roam').onclick = () => {
+  setRoam(false);
+  $('#enter-roam').focus({preventScroll: true});
+};
+document.querySelectorAll<HTMLButtonElement>('[data-step]').forEach(button => {
+  button.onclick = () => atlas.step(button.dataset.step!);
+});
+const roamKeys: Record<string,string> = {w:'forward', s:'back', a:'left', d:'right'};
+addEventListener('keydown', event => {
+  if (!document.body.classList.contains('roaming') || document.querySelector('dialog[open]') ||
+      document.body.classList.contains('chat-open') || event.ctrlKey || event.metaKey || event.altKey) return;
+  const direction = roamKeys[event.key.toLowerCase()];
+  if (direction) { event.preventDefault(); atlas.step(direction); }
+});
+placePill.onclick = () => locationDialog.showModal();
+$('#map-plus').onclick = () => atlas.zoom(1);
+$('#map-minus').onclick = () => atlas.zoom(-1);
+$('#map-home').onclick = () => { closeEvent(); atlas.home(); };
+
+globeButton.onclick = async () => {
+  setRoam(false);
+  globeButton.classList.add('hidden');
+  placePill.classList.add('hidden');
+  document.body.classList.remove('on-map');
+  arrival.hidden = false;
+  activityPanel.classList.add('hidden');
+  chatPanel.classList.add('hidden');
+  setChatOpen(false);
+  mobileChat.classList.add('hidden');
+  hud.classList.add('hidden');
+  closeEvent();
+  await world.returnToGlobe();
+  showExplorer();
+};
+
+function showExplorer() {
+  world.exploring = true;
+  document.body.classList.add('orbit-explore');
+  $('#arrival-kicker').textContent = 'World map';
+  arrivalTitle.innerHTML = 'Explore<br /><em>Earth.</em>';
+  arrivalCopy.textContent = 'Drag to rotate. Scroll to zoom. Click a location to land.';
+  arrival.classList.remove('hidden');
+  placePillLabel.textContent = 'Search places';
+  placePill.classList.remove('hidden');
+}
+
+async function placeAt(latitude:number, lng:number): Promise<Place> {
+  const lat = Math.max(-85.05,Math.min(85.05,latitude));
+  const fallback = lat.toFixed(1) + '°, ' + lng.toFixed(1) + '°';
+  let locality = fallback, city = fallback, region = '', country = '';
+  try {
+    const res = await fetch('https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=12&lat=' + lat.toFixed(3) + '&lon=' + lng.toFixed(3),{signal:AbortSignal.timeout(2200)});
+    const {address} = await res.json();
+    if (address) {
+      city = address.city || address.town || address.village || address.county || fallback;
+      locality = address.suburb || address.neighbourhood || city;
+      region = address.state || ''; country = address.country || '';
+    }
+  } catch { /* The globe selection remains usable without a place name. */ }
+  return {lat,lng,locality,city,region,country,source:'globe'};
+}
+
+async function landOnGlobe(lat:number, lng:number) {
+  placePill.classList.add('hidden');
+  arrivalCopy.textContent = 'Locating your selection…';
+  await landAt(await placeAt(lat,lng));
+}
+
+const searchMapArea = $<HTMLButtonElement>('#search-map-area');
+searchMapArea.onclick = async () => {
+  const previous = place;
+  const center = atlas.center;
+  searchMapArea.disabled = true;
+  searchMapArea.textContent = 'Finding area…';
+  try {
+    const next = await placeAt(center.lat,center.lng);
+    if (previous !== place || !document.body.classList.contains('on-map') || center.distanceTo(atlas.center) > 700) return;
+    closeEvent(); setChatOpen(false); atlas.clearWaypoint();
+    selectPlace(next, false);
+    showPlaceLabel();
+  } finally {
+    searchMapArea.disabled = false;
+    searchMapArea.textContent = 'Search this area';
+  }
+};
+
+const hostDialog = $<HTMLDialogElement>('#host-dialog');
+const hostForm = $<HTMLFormElement>('#host-form');
+let hostedId = '';
+$('#host-start').onclick = () => {
+  closeEvent(); setChatOpen(false); void chat.openArea();
+  create?.start();
+};
+$('#host-here').onclick = () => {
+  void chat.openArea();
+  $('#host-status').textContent = '';
+  hostedId = 'event_' + crypto.randomUUID().replaceAll('-','').slice(0,24);
+  hostDialog.showModal();
+};
+$('#host-cancel').onclick = () => hostDialog.close();
+hostForm.onsubmit = async e => {
+  e.preventDefault();
+  const at = atlas.venuePoint;
+  if (!at) return;
+  const form = new FormData(hostForm);
+  const title = String(form.get('title')).trim(), venue = String(form.get('venue')).trim();
+  const start = new Date(String(form.get('start'))).valueOf();
+  if (!title || !venue || !Number.isFinite(start) || start <= Date.now()) {
+    $('#host-status').textContent = 'Add a name, venue and future start time.'; return;
+  }
+  const button = hostForm.querySelector<HTMLButtonElement>('button[type=submit]')!;
+  if (button.disabled) return;
+  button.disabled = true;
+  const id = hostedId;
+  const area = areaId;
+  try {
+    await chat.write(id,JSON.stringify({title,venue,start,kind:form.get('kind'),lng:at[0],lat:at[1]}));
+    hostDialog.close(); hostForm.reset();
+    if (area !== areaId) return;
+    $('#pin-clear').click();
+    const row = activityList.querySelector<HTMLElement>('[data-event="' + id + '"]');
+    if (row) openEvent(id,row);
+    try { await chat.announce('New event: ' + title + ' · ' + venue + ' · ' + new Date(start).toLocaleString()); }
+    catch { if (previewId === id) $('#event-status').textContent = 'Event published. Chat announcement could not be sent.'; }
+  } catch (err) { $('#host-status').textContent = (err as Error).message; }
+  finally { button.disabled = false; }
+};
+
+let searchTimer = 0;
+searchInput.addEventListener('input', () => {
+  window.clearTimeout(searchTimer);
+  const query = searchInput.value.trim();
+  if (query.length < 3) { searchResults.innerHTML = ''; return; }
+  searchTimer = window.setTimeout(async () => {
+    searchResults.innerHTML = '<span class="searching">Searching the world…</span>';
+    try {
+      const response = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&addressdetails=1&q=${encodeURIComponent(query)}`);
+      const results = await response.json();
+      searchResults.innerHTML = results.map((result: any, index: number) => `<button type="button" data-result="${index}"><b>${escapeHtml(result.name || result.display_name.split(',')[0])}</b><span>${escapeHtml(result.display_name)}</span></button>`).join('') || '<span class="searching">No matching place found.</span>';
+      searchResults.querySelectorAll<HTMLButtonElement>('[data-result]').forEach((button) => {
+        button.onclick = () => {
+          const result = results[Number(button.dataset.result)];
+          const address = result.address || {};
+          const locality = result.name || address.suburb || address.city || address.town || address.village;
+          locationDialog.close();
+          void landAt({ lat: Number(result.lat), lng: Number(result.lon), locality, city: address.city || address.town || locality, region: address.state || '', country: address.country || '', source: 'search' });
+        };
+      });
+    } catch { searchResults.innerHTML = '<span class="searching">Search is unavailable. Try again.</span>'; }
+  }, 350);
 });
 
-// ---------- feed ----------
-function pushFeed(hp: Happening) {
-  const area = byId(hp.areaId);
-  const k = KIND[hp.kind];
-  document.querySelectorAll<HTMLElement>('.rows').forEach((box) => {
-    const max = box.closest('.drawer') ? 3 : 6;
-    const first = [...box.children].map((n) => n.getBoundingClientRect().top);
-    const row = h(`<div class="row fresh"><div class="ic" style="background:${k.color}">${k.icon}</div>
-      <div class="tx"><p>${esc(hp.title)}</p><div class="meta"><span>${esc(area?.name ?? hp.place)}</span><time>${esc(hp.when)}</time></div></div></div>`);
-    row.addEventListener('click', () => openHappening(hp));
-    [...box.children].find((n) => n.querySelector('p')?.textContent === hp.title)?.remove();
-    box.prepend(row);
-    while (box.children.length > max) box.lastElementChild!.remove();
-    [...box.children].slice(1).forEach((n, i) => {
-      const d = first[i] - n.getBoundingClientRect().top;
-      if (d) n.animate([{ transform: `translateY(${d}px)` }, { transform: 'none' }], { duration: 420, easing: 'cubic-bezier(0.77,0,0.175,1)' });
-    });
-  });
-}
+$('#precise-location').onclick = () => {
+  const button = $('#precise-location') as HTMLButtonElement;
+  if (!navigator.geolocation) { button.textContent = 'Location is unavailable in this browser'; return; }
+  button.textContent = 'Finding your precise area…';
+  navigator.geolocation.getCurrentPosition(async ({ coords }) => {
+    let locality = 'Your location', city = 'Your location', region = '', country = '';
+    try {
+      const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${coords.latitude}&lon=${coords.longitude}&zoom=14&addressdetails=1`);
+      const result = await response.json();
+      const address = result.address || {};
+      locality = address.suburb || address.neighbourhood || address.city_district || address.city || locality;
+      city = address.city || address.town || address.village || locality;
+      region = address.state || '';
+      country = address.country || '';
+    } catch { /* coordinates are still usable */ }
+    locationDialog.close();
+    button.textContent = 'Use my current location';
+    void landAt({ lat: coords.latitude, lng: coords.longitude, locality, city, region, country, source: 'device' });
+  }, () => { button.textContent = 'Could not access location — try search'; }, { enableHighAccuracy: false, timeout: 9000, maximumAge: 300000 });
+};
 
-// ---------- floating card (peek / build / area) ----------
-let card: HTMLElement | null = null;
-let cardAt: LatLng | null = null;
-function closeCard() { card?.remove(); card = null; cardAt = null; }
-function showCard(html: string, at: LatLng) {
-  closeCard();
-  card = h(`<div class="card peek show"><div class="nub"></div>${html}</div>`);
-  document.body.append(card);
-  card.querySelector('.x')?.addEventListener('click', closeCard);
-  cardAt = at;
-  placeCard();
-  return card;
-}
-function placeCard() {
-  if (!card || !cardAt) return;
-  if (MOBILE) { card.classList.add('docked'); return; }
-  const p = map.project(cardAt);
-  const right = chatOpen ? innerWidth - 400 : innerWidth;
-  const w = card.offsetWidth, hh = card.offsetHeight;
-  let x = p.x + 250;
-  const flip = x + w > right - 16;
-  if (flip) x = p.x - 30 - w;
-  const top = Math.max(16, Math.min(innerHeight - hh - 16, p.y - hh / 2));
-  card.style.left = `${Math.max(16, x)}px`;
-  card.style.top = `${top}px`;
-  card.classList.toggle('flip', flip);
-  (card.querySelector('.nub') as HTMLElement).style.top = `${Math.max(14, Math.min(hh - 26, p.y - top - 6))}px`;
-}
-
-function openHappening(hp: Happening) {
-  const area = byId(hp.areaId);
-  const k = KIND[hp.kind];
-  const c = showCard(`
-    <header><div><span class="tag" style="background:${k.color}">${k.icon}${k.label}</span><h3>${esc(hp.title)}</h3></div><button class="x" aria-label="Close">${ICON.x}</button></header>
-    <div class="facts">
-      <div>${ICON.pin}<span>${esc(hp.place)}${area ? `, ${esc(area.name)}` : ''}</span></div>
-      <div>${ICON.clock}<span>${esc(hp.when)}</span></div>
-    </div>
-    <div class="blk people"><div><div class="lab">People here</div><b class="num">${hp.people}</b></div>${stack(Math.min(5, hp.people), hp.title.length)}</div>
-    <button class="btn primary" data-join="${hp.areaId}">${ICON.chat}Join ${esc(area?.name ?? '')} chat</button>`, hp.at);
-  c.querySelector<HTMLButtonElement>('[data-join]')!.onclick = () => { closeCard(); openChat(hp.areaId); };
-  map.flyTo(hp.at, false);
-}
-
-function openArea(area: Area) {
-  const mine = user?.areaId === area.id;
-  const c = showCard(`
-    <header><div><h3>${esc(area.name)}</h3><div class="sub num">${ICON.people}${area.hereNow} people here now</div></div><button class="x" aria-label="Close">${ICON.x}</button></header>
-    ${area.founder ? `<div class="blk"><div class="lab">Founder</div><b>${esc(area.founder)}</b></div>` : ''}
-    <div class="blk"><div class="lab">${mine ? 'This is your area' : 'Visiting'}</div><span class="muted">${mine ? 'You can post in this room.' : 'You can read this room. Only people who live here can post.'}</span></div>
-    <button class="btn primary">${ICON.chat}Open ${esc(area.name)} chat</button>`, area.center);
-  c.querySelector<HTMLButtonElement>('.btn')!.onclick = () => { closeCard(); openChat(area.id); };
-}
-
-function openBuild(at: LatLng) {
-  if (!user) { openSignIn('Sign in first. Founders need a name.'); return; }
-  const c = showCard(`
-    <header><div><h3>Build your neighbourhood</h3><div class="sub">Nobody has started one here yet.</div></div><button class="x" aria-label="Close">${ICON.x}</button></header>
-    <label class="field"><span>Name it</span><input class="input" maxlength="32" placeholder="e.g. Bellandur Lakeside" /></label>
-    <div class="founder">${av(user.name)}<p>You'll be the founder<br><span>It becomes your area. Host events, invite people.</span></p></div>
-    <p class="note">${ICON.lock}Others only see the area name. Your exact spot never leaves your device.</p>
-    <button class="btn primary" disabled>Build it</button>`, at);
-  const input = c.querySelector<HTMLInputElement>('input')!;
-  const btn = c.querySelector<HTMLButtonElement>('.btn')!;
-  input.oninput = () => { btn.disabled = input.value.trim().length < 2; };
-  input.focus();
-  btn.onclick = async () => {
-    const name = input.value.trim();
-    const id = `${slug(name)}-${Math.random().toString(36).slice(2, 6)}`;
-    const area: Area = { id, name, center: at, radiusKm: 0.8, ring: ringAround(at, 0.8, Math.random() * 3), hereNow: 1, founder: user!.name };
-    btn.disabled = true; btn.textContent = 'Building...';
-    try { await chat.ensureRoom(roomIdFor(CITY, id)); } catch (e) { btn.textContent = `Could not create room: ${(e as Error).message}`; return; }
-    saveBuiltArea(CITY, area);
-    areas.push(area);
-    const prev = user!.areaId;
-    user = saveUser(user!.name, id, user);
-    map.setArea(area, true);
-    const old = byId(prev); if (old) map.setArea(old, false);
-    closeCard();
-    openChat(id);
-  };
-}
-
-// ---------- sign-in ----------
-function openSignIn(reason?: string) {
-  $('.modal')?.remove();
-  const opts = areas.map((a) => `<option value="${a.id}" ${user?.areaId === a.id ? 'selected' : ''}>${esc(a.name)}</option>`).join('');
-  const m = h(`<div class="modal"><div class="card sheet">
-    <header><div><h3>${user ? 'Your profile' : 'Join nearby'}</h3><div class="sub">${esc(reason ?? 'No password. Just a name and your area.')}</div></div><button class="x" aria-label="Close">${ICON.x}</button></header>
-    <label class="field"><span>Display name</span><input class="input" id="si-name" maxlength="40" value="${esc(user?.name ?? '')}" placeholder="e.g. Varun" /></label>
-    <label class="field"><span>Your area</span><div class="row2"><select class="input" id="si-area"><option value="">Choose an area</option>${opts}</select>
-      <button class="btn ghost" id="si-locate" type="button">${ICON.locate}Find me</button></div></label>
-    <p class="note" id="si-note">${ICON.lock}Location is turned into an area name on this device. Only the area name is shared.</p>
-    <button class="btn primary" id="si-go">${user ? 'Save' : 'Sign in'}</button></div></div>`);
-  document.body.append(m);
-  const name = m.querySelector<HTMLInputElement>('#si-name')!, sel = m.querySelector<HTMLSelectElement>('#si-area')!, note = m.querySelector<HTMLElement>('#si-note')!;
-  m.querySelector('.x')!.addEventListener('click', () => m.remove());
-  m.querySelector<HTMLButtonElement>('#si-locate')!.onclick = () => {
-    if (!navigator.geolocation) { note.textContent = 'This browser has no location. Pick your area.'; return; }
-    note.textContent = 'Finding your area...';
-    navigator.geolocation.getCurrentPosition((pos) => {
-      // The coordinates stay in this callback. Only the area id survives.
-      const hit = snapToArea({ lat: pos.coords.latitude, lng: pos.coords.longitude }, areas);
-      if (hit) { sel.value = hit.id; note.textContent = `You're in ${hit.name}. Only "${hit.name}" is shared.`; }
-      else note.textContent = 'You are not near any area yet. Pick one, or build one on the map.';
-    }, () => { note.textContent = 'Location is off. Pick your area.'; }, { enableHighAccuracy: false, timeout: 8000, maximumAge: 600000 });
-  };
-  m.querySelector<HTMLButtonElement>('#si-go')!.onclick = async () => {
-    if (name.value.trim().length < 2) { name.focus(); return; }
-    if (!sel.value) { note.textContent = 'Pick your area first.'; return; }
-    const prev = user?.areaId;
-    user = saveUser(name.value, sel.value, user);
-    renderMe();
-    [prev, user.areaId].forEach((id) => { const a = id && byId(id); if (a) map.setArea(a, a.id === user!.areaId); });
-    m.remove();
-    if (chatRoom) openChat(chatArea!);
-  };
-  name.focus();
-}
-
-// ---------- chat dock ----------
-let chat: ChatService;
-let chatOpen = false, chatRoom: string | null = null, chatArea: string | null = null;
-let connectedAs: string | null = null;
-
-const fmt = (t: number) => new Date(t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-function msgEl(m: ChatMessage) {
-  const mine = m.userId === (user?.userId ?? connectedAs);
-  return h(mine
-    ? `<div class="m mine"><time>${fmt(m.at)}</time><div class="b"><p>${esc(m.text)}</p></div></div>`
-    : `<div class="m">${av(m.name)}<div class="b"><div class="n">${esc(m.name)}</div><p>${esc(m.text)}</p></div><time>${fmt(m.at)}</time></div>`);
-}
-
-async function openChat(areaId: string) {
-  const area = byId(areaId); if (!area) return;
-  $('.dock')?.remove();
-  chatOpen = true; chatArea = areaId; chatRoom = roomIdFor(CITY, areaId);
-  document.body.classList.add('chat-open');
-  const canPost = !!user && user.areaId === areaId;
-  const mineArea = user && byId(user.areaId);
-  const d = h(`<aside class="dock"><header><div class="shape">${ICON.area(20)}</div><div><h3>${esc(area.name)}</h3><div class="sub num">${area.hereNow} here now · <span class="mode ${chat.mode}">${chat.label}</span></div></div><div class="sp"></div><button class="x" aria-label="Close chat">${ICON.x}</button></header>
-    <div class="msgs"><div class="day">Today</div></div>
-    ${canPost
-      ? `<form class="composer"><input class="input" maxlength="500" placeholder="Message ${esc(area.name)}" /><button class="send" aria-label="Send">${ICON.send}</button></form>`
-      : `<div class="locked">${ICON.lock}<span>${user ? `You can only post in your own area${mineArea ? ` (${esc(mineArea.name)})` : ''}.` : 'Sign in to post.'}</span>${user ? '' : '<button class="btn primary sm" data-act="signin">Sign in</button>'}</div>`}
-  </aside>`);
-  document.body.append(d);
-  placeCard();
-  const box = d.querySelector<HTMLElement>('.msgs')!;
-  const add = (m: ChatMessage) => { if (!box.querySelector(`[data-id="${CSS.escape(m.id)}"]`)) { const e = msgEl(m); e.dataset.id = m.id; box.append(e); box.scrollTop = box.scrollHeight; } };
-  d.querySelector('.x')!.addEventListener('click', () => { d.remove(); chatOpen = false; chatRoom = null; document.body.classList.remove('chat-open'); void chat.leave(); });
-  const room = chatRoom;
-  try {
-    const who = user ?? { userId: guestId(), name: 'Guest' };
-    await chat.connect(who); connectedAs = who.userId;
-    const backlog = await chat.join(room, (m) => { if (chatRoom === room) add(m); });
-    backlog.forEach(add);
-  } catch (e) {
-    box.append(h(`<div class="err">Chat is not reachable: ${esc((e as Error).message)}</div>`));
-  }
-  const form = d.querySelector<HTMLFormElement>('.composer');
-  form?.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const input = form.querySelector('input')!; const text = input.value.trim();
-    if (!text) return;
-    input.value = '';
-    try { add(await chat.send(room, text)); } catch (err) { box.append(h(`<div class="err">Not sent: ${esc((err as Error).message)}</div>`)); }
-  });
-}
-
-// ---------- live happenings ----------
-const live: { hp: Happening; remove: () => void }[] = [];
-let seq = 0;
-// Two pop-ups clash when their screen boxes would overlap .
-// A spot is no good when it is off screen, under a panel, or too close to a live one.
-function clashes(at: LatLng) {
-  const p = map.project(at);
-  const left = MOBILE ? 20 : 380, bottom = innerHeight - (MOBILE ? 240 : 40);
-  if (p.x < left || p.x > innerWidth - (MOBILE ? 180 : 240) || p.y < 110 || p.y > bottom) return true;
-  return live.some((l) => { const q = map.project(l.hp.at); return Math.abs(p.x - q.x) < (MOBILE ? 150 : 200) && Math.abs(p.y - q.y) < 56; });
-}
-let cursor = 0;
-function popNext() {
-  const n = CITY.happenings.length;
-  let pick = cursor % n;
-  for (let i = 0; i < n; i++) {
-    const s = CITY.happenings[(cursor + i) % n];
-    if (!live.some((l) => l.hp.title === s.title) && !clashes(s.at)) { pick = (cursor + i) % n; break; }
-  }
-  cursor = pick + 1;
-  const hp: Happening = { ...CITY.happenings[pick], id: `h${seq++}` };
-  const k = KIND[hp.kind];
-  const html = hp.kind === 'joined'
-    ? `<div class="chip joined">${stack(3, seq)}<b>${esc(hp.title)}</b></div>`
-    : `<div class="chip"><span class="dot" style="background:${k.color}">${k.icon}</span><span class="t"><b>${esc(hp.title)}</b><small>${esc(hp.when)}</small></span></div>`;
-  const old = live.findIndex((l) => l.hp.title === hp.title);
-  if (old >= 0) live.splice(old, 1)[0].remove();
-  live.push({ hp, remove: map.addHappening(hp, html, () => openHappening(hp)) });
-  while (live.length > (MOBILE ? 5 : 8)) live.shift()!.remove();
-  pushFeed(hp);
-}
-function tick() {
-  popNext();
-  setTimeout(tick, 1000 + Math.random() * 2000);
-}
-
-// ---------- boot ----------
-let map: MapView;
-async function boot() {
-  chat = await createChat(CITY);
-  $('#chat-badge').textContent = chat.mode === 'demo' ? 'demo chat' : 'chat: live on Nexconn';
-  const el = $('#map');
-  const { createMap } = await import('./map/map');
-  map = await createMap(el, CITY, MOBILE);
-  areas.forEach((a) => map.setArea(a, a.id === user?.areaId));
-  map.onMove(placeCard);
-  map.onMapClick((at) => {
-    const a = areaAt(at, areas);
-    if (a) openArea(a); else openBuild(at);
-  });
-  // Start with a handful on screen, then one every 1-3 s.
-  for (let i = 0; i < 6; i++) setTimeout(popNext, 900 + i * 220);
-  setTimeout(tick, 900 + 6 * 220 + 1200);
-}
-void boot();
+void start();

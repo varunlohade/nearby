@@ -1,0 +1,40 @@
+:root { --accent:#ffd29b; --panel:#191b20f5; }
+.on-map .nearby {border:1px solid #ffffff24;border-radius:12px;background:#191b20;box-shadow:0 12px 42px #10101955;}
+#enter-roam {width:100%;display:flex;flex:none;position:relative;align-items:flex-start;justify-content:flex-end;flex-direction:column;gap:5px;padding:20px;height:145px;border:none;border-bottom:1px solid #ffffff22;text-align:left;color:#fff8e7;background:linear-gradient(80deg,#201c35b8,transparent 90%),url(/posters/free-roam.png) center / cover;cursor:pointer;}
+#enter-roam strong {font:italic 800 46px/.95 var(--display);letter-spacing:-.045em;text-transform:uppercase;text-shadow:2px 3px #322a3b;}
+.roam-tag {font:600 9px/1.5 'Geist Mono',monospace;letter-spacing:.13em;color:#ffe2bb;}
+.roam-arrow {position:absolute;right:16px;bottom:18px;border:1px solid #ffefd466;background:#26233199;width:32px;height:32px;border-radius:50%;display:grid;place-items:center;font-size:18px;}
+#enter-roam:hover .roam-arrow {background:#ffddab;color:#25212a;}
+.nearby-head {border-top:0;background:#191b20;padding:18px;}
+.index-heading h2 {font-size:23px;text-transform:none;letter-spacing:-.015em;}
+.index-count,#host-start,.place-chip,.round-button,.chat-launcher,.map-tools button {border-radius:6px;}
+.chat-launcher {border-left-width:1px;}
+.on-map .hud {max-width:min(65vw,760px);}
+#roam-controls:not([hidden]) {display:grid;position:absolute;bottom:38px;left:50%;transform:translateX(-50%);justify-items:center;gap:8px;}
+#roam-controls button {color:#fff5e6;border:1px solid #ffffff40;background:#202027ed;border-radius:8px;padding:8px 13px;}
+.roam-pad {display:flex;gap:3px;}
+.roam-pad button {width:44px;height:44px;font:22px/1 sans-serif;}
+#roam-controls small {color:#fff;font:10px 'Geist Mono',monospace;background:#19191ecc;padding:4px 8px;border-radius:3px;}
+.roaming :is(#activity-panel,.map-tools,.blip,.player-position,#search-map-area) {display:none!important;}
+.roaming #street-atlas::after {content:'';position:absolute;pointer-events:none;left:50%;top:50%;width:12px;height:12px;border-radius:50%;transform:translate(-50%,-50%);background:#ffd499;border:3px solid #373038;box-shadow:0 0 0 7px #ffc58e55;}
+.chat-open #roam-controls {visibility:hidden;}
+@media(max-width:720px){
+  #enter-roam {height:76px;padding:10px 15px;gap:3px;background-position:center 55%;}
+  #enter-roam strong {font-size:31px;}
+  .chat-launcher {bottom:220px;}
+  .roaming .chat-launcher {bottom:137px;}
+  #roam-controls:not([hidden]) {bottom:26px;}
+  #roam-controls small {display:none;}
+  .nearby-head {padding:10px 12px;}
+  .picking #activity-panel {visibility:hidden;}
+}
+.roam-avatar {display:none;}
+.roaming .roam-avatar {position:absolute;display:block;pointer-events:none;z-index:2;left:50%;top:50%;width:21px;height:43px;transform:translate(-50%,-100%);filter:drop-shadow(1px 2px 1px #171822aa);}
+.roam-avatar::before,.roam-avatar::after,.roam-avatar i {content:'';position:absolute;display:block;}
+.roam-avatar::before {z-index:2;top:0;left:6px;width:10px;height:11px;border-radius:44% 44% 38% 38%;background:linear-gradient(#262127 63%,#b18566 64%);box-shadow:inset -2px 0 #271e2455;}
+.roam-avatar i {z-index:1;top:10px;left:0;width:21px;height:20px;background:linear-gradient(87deg,#d5965b 17%,#aa744d 18%,#e8ad69 27%,#ebb477 62%,#bb8052 76%,#dea465 80%);border-top:2px solid #3c383f;border-radius:7px 7px 3px 3px;clip-path:polygon(10% 0,88% 0,100% 95%,83% 100%,74% 53%,77% 100%,23% 100%,26% 52%,17% 100%,0 93%);}
+.roam-avatar::after {top:27px;left:4px;width:14px;height:16px;border-radius:1px;background:linear-gradient(0deg,#252228 16%,#414656 17%,#393c48);clip-path:polygon(0 0,100% 0,100% 100%,59% 100%,48% 32%,37% 100%,0 100%);}
+.roaming #street-atlas::after {width:25px;height:8px;background:#1f1e2380;border:1px solid #ffd49b99;box-shadow:0 0 0 3px #ffd49b22;}
+.roaming #street-atlas .maplibregl-canvas {image-rendering:pixelated;}
+body:not(.roaming) .roam-credit {display:none;}
+body.roaming #app .ask {display:none;}

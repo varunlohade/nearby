@@ -1,0 +1,173 @@
+/* Ask about my neighbourhood — matches the street-atlas HUD (amber accent, condensed display type). */
+.ask {
+  --ask-bg: #171919f5;
+  position: absolute; z-index: 6; left: 50%; bottom: 40px; transform: translateX(-50%);
+  width: min(540px, calc(100vw - 720px)); min-width: 380px;
+  display: none; flex-direction: column; gap: 8px; pointer-events: none;
+}
+.on-map .ask { display: flex; }
+.ask > * { pointer-events: auto; }
+.picking .ask, .chat-open .ask { visibility: hidden; }
+
+.ask-bar {
+  display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; align-items: center; gap: 8px;
+  height: 52px; padding: 0 6px 0 10px; background: var(--ask-bg); border: 1px solid #ffffff2e;
+  border-left: 3px solid var(--accent); border-radius: 3px; box-shadow: 0 10px 30px #0007;
+  transition: border-color .2s, box-shadow .2s;
+}
+.ask-bar:focus-within { border-color: #ffffff5c; border-left-color: var(--accent); box-shadow: 0 10px 30px #0008, 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); }
+.ask-glyph {
+  width: 28px; height: 28px; display: grid; place-items: center; border-radius: 2px;
+  background: var(--accent); color: var(--accent-ink, #231a0c); font: italic 800 20px/1 var(--display, sans-serif); transform: skewX(-8deg);
+}
+.ask-bar input { min-width: 0; height: 100%; border: 0; outline: 0; background: transparent; color: #f6f2e6; font: 500 15px Geist, sans-serif; }
+.ask-bar input::placeholder { color: #b9b8ad; }
+.ask-bar button {
+  height: 38px; padding: 0 16px; border: 0; border-radius: 2px; background: #efeadf; color: #191a18;
+  font: 700 17px/1 var(--display, sans-serif); text-transform: uppercase; letter-spacing: .02em;
+}
+.ask-bar button:hover { background: var(--accent); }
+.ask.busy .ask-bar button { opacity: .55; pointer-events: none; }
+
+.ask-chips { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; padding: 2px 1px; }
+.ask-chips button {
+  flex: none; padding: 6px 10px; border: 1px solid #ffffff38; border-radius: 2px; background: #161818e6; color: #eeeadf;
+  font: 500 12px Geist, sans-serif; white-space: nowrap; box-shadow: 0 4px 12px #0005;
+}
+.ask-chips button:hover { border-color: var(--accent); color: var(--accent); }
+.ask-open .ask-chips { display: none; }
+
+.ask-card {
+  order: -1; display: flex; flex-direction: column; max-height: calc(100dvh - 260px); overflow: auto; overscroll-behavior: contain;
+  background: #1c1e1ef7; border: 1px solid #ffffff2a; border-top: 3px solid var(--accent); border-radius: 3px;
+  box-shadow: 0 18px 44px #0009; color: #f4f2e9; animation: ask-in .28s cubic-bezier(.2, .8, .2, 1);
+}
+.ask-card[hidden] { display: none; }
+@keyframes ask-in { from { opacity: 0; transform: translateY(8px); } }
+.ask-head { display: flex; align-items: center; justify-content: space-between; padding: 10px 10px 0 14px; }
+.ask-kicker { display: flex; align-items: center; gap: 8px; color: var(--accent); font: 600 10px/1.4 "Geist Mono", monospace; letter-spacing: .1em; text-transform: uppercase; }
+.ask-kicker i { width: 7px; height: 7px; background: var(--accent); border-radius: 1px; transform: rotate(45deg); }
+.ask-close { width: 28px; height: 28px; border: 0; background: transparent; color: #cfcdc3; font-size: 22px; line-height: 1; }
+.ask-close:hover { color: white; }
+.ask-question { margin: 4px 14px 0; font: 700 24px/1.05 var(--display, sans-serif); text-transform: uppercase; color: #fff5df; overflow-wrap: anywhere; }
+.ask-body { padding: 8px 14px 12px; font: 14px/1.55 Geist, sans-serif; color: #dad8ce; }
+.ask-body b { color: #fff; font-weight: 600; }
+.ask-error { color: #efc67c; }
+.ask-loading { display: inline-flex; align-items: center; gap: 10px; color: #c9c8be; font: 500 12px "Geist Mono", monospace; text-transform: uppercase; letter-spacing: .08em; }
+.ask-loading i { position: relative; width: 70px; height: 3px; background: #ffffff1f; overflow: hidden; }
+.ask-loading i::after { content: ''; position: absolute; inset: 0; width: 40%; background: var(--accent); animation: ask-scan 1s ease-in-out infinite alternate; }
+@keyframes ask-scan { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+
+.ask-route { display: grid; grid-template-columns: 1fr 1fr 1.6fr; gap: 1px; margin: 0 14px 12px; background: #ffffff1f; border-radius: 2px; overflow: hidden; }
+.ask-route[hidden] { display: none; }
+.ask-stat { padding: 8px 10px; background: #151717; min-width: 0; }
+.ask-stat b { display: block; color: var(--accent); font: 700 22px/1 var(--display, sans-serif); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ask-stat.wide b { color: #f4f2e9; font-size: 18px; text-transform: uppercase; }
+.ask-stat small { display: block; margin-top: 3px; color: #a9a99f; font: 500 9px "Geist Mono", monospace; text-transform: uppercase; letter-spacing: .08em; }
+
+.ask-places { list-style: none; margin: 0 0 8px; padding: 0 8px; display: grid; gap: 1px; }
+.ask-places:empty { display: none; }
+.ask-places button {
+  width: 100%; display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; align-items: center; gap: 10px;
+  padding: 7px 6px; border: 0; border-radius: 2px; background: transparent; color: inherit; text-align: left; font: 13px Geist, sans-serif;
+}
+.ask-places button:hover, .ask-places li.is-on button { background: #eeeadd; color: #151715; }
+.ask-places button > b { width: 22px; height: 22px; display: grid; place-items: center; border-radius: 2px; background: var(--accent); color: #1b1408; font: 700 14px var(--display, sans-serif); }
+.ask-places span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ask-places small { display: block; color: #a9a99f; font-size: 10px; overflow: hidden; text-overflow: ellipsis; }
+.ask-places li.is-on small, .ask-places button:hover small { color: #55574f; }
+.ask-places em { font: normal 500 11px "Geist Mono", monospace; color: #c8c6bc; }
+.ask-places li.is-on em, .ask-places button:hover em { color: #3f413b; }
+.ask-source { padding: 8px 14px 10px; border-top: 1px solid #ffffff17; color: #9d9c93; font: 500 9.5px/1.4 "Geist Mono", monospace; letter-spacing: .04em; text-transform: uppercase; }
+.ask-source:empty { display: none; }
+
+/* map markers */
+.ask-pin {
+  display: grid; justify-items: center; padding: 0 0 6px; border: 0; background: transparent; cursor: pointer; filter: drop-shadow(0 2px 2px #000b);
+}
+.ask-pin b {
+  position: relative; width: 28px; height: 28px; display: grid; place-items: center; border: 2px solid #121414; border-radius: 3px;
+  background: var(--accent); color: #1b1408; font: 800 17px/1 var(--display, sans-serif); box-shadow: 0 0 0 1.5px #f4eee0;
+}
+.ask-pin b::after { content: ''; position: absolute; bottom: -8px; border: 4px solid transparent; border-top: 5px solid #f4eee0; border-bottom: 0; }
+.ask-pin span {
+  position: absolute; bottom: 42px; display: none; padding: 3px 7px; background: #131515; color: #fff; white-space: nowrap;
+  font: 600 14px var(--display, sans-serif); text-transform: uppercase;
+}
+.ask-pin:hover, .ask-pin.is-on { z-index: 5; }
+.ask-pin:hover span, .ask-pin.is-on span { display: block; }
+.ask-pin.is-on b { box-shadow: 0 0 0 3px white, 0 0 0 9px color-mix(in srgb, var(--accent) 35%, transparent); }
+
+.ask-flag { position: relative; width: 30px; height: 44px; pointer-events: none; filter: drop-shadow(1px 2px 1px #000c); }
+.ask-flag i { position: absolute; left: 4px; bottom: 0; width: 3px; height: 40px; background: #f4eee0; }
+.ask-flag i::after {
+  content: ''; position: absolute; left: 3px; top: 0; width: 22px; height: 15px;
+  background: repeating-conic-gradient(#121414 0 25%, #f4eee0 0 50%) 0 0 / 10px 7.5px; border: 1px solid #f4eee0;
+}
+.ask-flag span {
+  position: absolute; left: 32px; top: -2px; padding: 2px 7px; background: var(--accent); color: #1b1408; white-space: nowrap;
+  font: 700 14px var(--display, sans-serif); text-transform: uppercase;
+}
+
+@media (max-width: 1180px) and (min-width: 721px) {
+  .ask { left: auto; right: var(--edge); bottom: 100px; transform: none; width: min(430px, 46vw); min-width: 0; }
+}
+@media (max-width: 720px) {
+  .ask { left: var(--edge); right: var(--edge); top: 146px; bottom: auto; transform: none; width: auto; min-width: 0; }
+  .ask-bar { height: 46px; }
+  .ask-card { order: 2; max-height: min(40dvh, calc(100dvh - 330px)); }
+  .ask-body { font-size: 13px; line-height: 1.5; }
+  .ask-chips { order: 1; }
+  .ask-open .nearby, .ask-open .chat-launcher { visibility: hidden; }
+  .ask-question { font-size: 21px; }
+  .waypoint-open .ask { visibility: hidden; }
+}
+@media (prefers-reduced-motion: reduce) { .ask-card, .ask-loading i::after { animation: none; } }
+.ask-open #search-map-area { display: none !important; }
+
+/* Mission log: what the guide is doing on the map, live. */
+.ask-steps { list-style: none; margin: 8px 14px 0; padding: 0; display: grid; gap: 4px; }
+.ask-steps:empty { display: none; }
+.ask-steps li { display: flex; align-items: center; gap: 8px; color: #c9c8be; font: 500 11px/1.3 "Geist Mono", monospace; letter-spacing: .03em; animation: ask-in .25s ease-out; }
+.ask-steps li i { flex: none; width: 14px; height: 14px; display: grid; place-items: center; border: 1.5px solid #ffffff55; border-radius: 2px; }
+.ask-steps li.run i { border-color: var(--accent); border-top-color: transparent; border-radius: 50%; animation: ask-spin .8s linear infinite; }
+.ask-steps li.done { color: #e9e5d8; }
+.ask-steps li.done i { border-color: var(--accent); background: var(--accent); }
+.ask-steps li.done i::after { content: ''; width: 6px; height: 3px; margin-top: -2px; border: solid #1b1408; border-width: 0 0 2px 2px; transform: rotate(-45deg); }
+.ask-steps li.fail { color: #e0a08a; }
+.ask-steps li.fail i { border-color: #e0a08a; }
+@keyframes ask-spin { to { transform: rotate(360deg); } }
+
+/* Where the visitor is */
+.ask-spot { margin: 6px 14px 0; color: #9fe9d6; font: 500 11px "Geist Mono", monospace; letter-spacing: .03em; }
+.ask-spot[hidden] { display: none; }
+.ask-spot button { padding: 0; border: 0; background: none; color: #d9d9cd; font: inherit; text-decoration: underline; text-underline-offset: 2px; }
+.ask-locate { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 14px 12px; }
+.ask-locate[hidden] { display: none; }
+.ask-locate-options { display: contents; }
+.ask-locate-options p { flex: 1 0 100%; margin: 0 0 2px; color: #f4f2e9; font: 600 13px Geist, sans-serif; }
+.ask-locate button {
+  padding: 8px 12px; border: 1px solid #ffffff3d; border-radius: 2px; background: #151717; color: #f1eee5;
+  font: 600 13px Geist, sans-serif; text-align: left;
+}
+.ask-locate .ask-locate-option { border-color: color-mix(in srgb, var(--accent) 60%, transparent); }
+.ask-locate button:hover { background: var(--accent); border-color: var(--accent); color: #1b1408; }
+.ask-locate-gps { color: #9fe9d6 !important; border-color: #73ddc880 !important; }
+.ask-locate-gps:hover { background: #73ddc8 !important; color: #10231d !important; }
+.ask-you { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 50%; background: #54cfb333; border: 1.5px solid #8ff0d8; pointer-events: none; animation: ask-you 2.4s ease-out infinite; }
+.ask-you i { width: 14px; height: 14px; border-radius: 50%; background: #b4ffe6; border: 2px solid #10231d; }
+.ask-you span { position: absolute; top: 47px; padding: 1px 6px; background: #b4ffe6; color: #10231d; font: 700 13px var(--display, sans-serif); text-transform: uppercase; }
+@keyframes ask-you { 0% { box-shadow: 0 0 0 0 #8ff0d866; } 100% { box-shadow: 0 0 0 16px #8ff0d800; } }
+
+/* What people say */
+.ask-places li.has-review { padding-bottom: 6px; border-bottom: 1px solid #ffffff12; }
+.ask-review { margin: 0 6px 4px 40px; }
+.ask-review p { margin: 2px 0 6px; color: #d4d2c8; font: 12px/1.45 Geist, sans-serif; }
+.ask-review p i { display: inline-block; margin-right: 6px; padding: 1px 6px; border-radius: 2px; font: normal 700 10px/1.5 "Geist Mono", monospace; text-transform: uppercase; letter-spacing: .05em; background: #ffffff1f; color: #e6e3d8; }
+.ask-review.positive p i { background: #5ee3a62e; color: #8ff0c2; }
+.ask-review.mixed p i { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--accent); }
+.ask-review.negative p i { background: #ff8ea22b; color: #ffb3c0; }
+.ask-review blockquote { margin: 0 0 6px; padding: 6px 9px; border-left: 2px solid color-mix(in srgb, var(--accent) 70%, transparent); background: #151717; color: #e9e6da; font: italic 12px/1.45 Geist, sans-serif; }
+.ask-review blockquote a { margin-left: 4px; color: var(--accent); font: normal 600 10px "Geist Mono", monospace; text-decoration: none; white-space: nowrap; }
+.ask-review blockquote a:hover { text-decoration: underline; }
+.ask-pin.has-review b::before { content: '★'; position: absolute; top: -9px; right: -9px; width: 15px; height: 15px; display: grid; place-items: center; border-radius: 50%; background: #121414; color: var(--accent); font: 10px/1 sans-serif; border: 1px solid #f4eee0; }

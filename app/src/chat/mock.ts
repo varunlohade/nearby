@@ -1,37 +1,58 @@
-import type { CityConfig } from '../types';
-import type { ChatIdentity, ChatMessage, ChatService } from './types';
+import type { ChatIdentity, ChatMessage, ChatRoom, ChatService, RoomEvents } from './types';
 
-/** Local stand-in for Nexconn. Rooms live in localStorage; other tabs get messages via BroadcastChannel. */
-export function createMockChat(city: CityConfig): ChatService {
-  let me: ChatIdentity | null = null;
-  let room: string | null = null;
-  let listener: ((m: ChatMessage) => void) | null = null;
-  const bus = 'BroadcastChannel' in window ? new BroadcastChannel('nearby-demo-chat') : null;
-  bus?.addEventListener('message', (e) => { const m = e.data as ChatMessage; if (m.roomId === room) listener?.(m); });
-
-  const key = (r: string) => `nearby.demo.${r}`;
-  const stored = (r: string): ChatMessage[] => { try { return JSON.parse(localStorage.getItem(key(r)) || '[]'); } catch { return []; } };
-  const seed = (r: string): ChatMessage[] => {
-    const areaId = r.slice(r.lastIndexOf('_') + 1);
-    const now = Date.now();
-    return city.chats.filter((c) => c.areaId === areaId).map((c, i, all) => ({
-      id: `seed-${r}-${i}`, roomId: r, userId: `seed-${c.name}`, name: c.name, text: c.text, at: now - (all.length - i) * 6 * 60_000,
-    }));
-  };
-
+export function createMockChat(): ChatService {
+  let me: ChatIdentity;
+  let room: ChatRoom | null = null;
+  let events: RoomEvents | null = null;
+  const messagesKey = (id: string) => 'nearby.demo.' + id;
+  const metaPrefix = (id: string) => 'nearby.meta.' + id + '.';
+  const history = (id: string): ChatMessage[] => JSON.parse(localStorage.getItem(messagesKey(id)) || '[]');
+  function syncMetadata() {
+    if (!room) return;
+    const prefix = metaPrefix(room.id);
+    const entries = Object.keys(localStorage).filter(key => key.startsWith(prefix));
+    events?.metadata(Object.fromEntries(entries.map(key => [key.slice(prefix.length), localStorage.getItem(key)!])));
+  }
+  window.addEventListener('storage', ({key}) => {
+    if (!room || !key) return;
+    if (key.startsWith(metaPrefix(room.id))) syncMetadata();
+    if (key === messagesKey(room.id)) history(room.id).forEach(message => events?.message(message));
+  });
+  function check(id: string) {
+    if (room?.id !== id) throw new Error('Room changed');
+  }
   return {
     mode: 'demo',
-    label: 'demo chat',
-    async connect(who) { me = who; },
-    async ensureRoom() {},
-    async join(r, onMessage) { room = r; listener = onMessage; return seed(r).concat(stored(r)).slice(-30); },
-    async leave() { room = null; listener = null; },
-    async send(r, text) {
-      if (!me) throw new Error('not connected');
-      const m: ChatMessage = { id: `m${Date.now()}${Math.random().toString(36).slice(2, 6)}`, roomId: r, userId: me.userId, name: me.name, text, at: Date.now() };
-      try { localStorage.setItem(key(r), JSON.stringify(stored(r).concat(m).slice(-50))); } catch { /* session only */ }
-      bus?.postMessage(m);
-      return m;
+    async connect(who) { me = who; return who; },
+    async join(next, callbacks) {
+      room = next; events = callbacks;
+      const seed = next.demoMessages ?? [];
+      seed.forEach((m,i) => callbacks.message({...m, id: 'seed-' + i, roomId: next.id, userId: 'seed-' + m.name, at: Date.now() - (seed.length-i)*360000}));
+      history(next.id).forEach(callbacks.message);
+      syncMetadata();
+      callbacks.availability(true);
+    },
+    async leave() { room = null; events = null; },
+    async send(id, text, file) {
+      let image: string | undefined;
+      if (file) image = await new Promise<string>((resolve,reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(new Error('Could not read photo'));
+        reader.readAsDataURL(file);
+      });
+      check(id);
+      const msg = {id: crypto.randomUUID(), roomId: id, userId: me.userId, name: me.name, at: Date.now(), text, image};
+      // Serialize same-origin demo writers so simultaneous tabs keep both posts.
+      const persist = () => localStorage.setItem(messagesKey(id), JSON.stringify([...history(id), msg].slice(-50)));
+      if (navigator.locks) await navigator.locks.request(messagesKey(id), persist); else persist();
+      return msg;
+    },
+    async write(id, key, value) {
+      check(id);
+      if (value === null) localStorage.removeItem(metaPrefix(id) + key);
+      else localStorage.setItem(metaPrefix(id) + key, value);
+      syncMetadata();
     },
   };
 }
