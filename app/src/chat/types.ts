@@ -22,6 +22,8 @@ export interface RoomEvents {
   metadata(values: Record<string, string>): void;
   availability(ready: boolean, detail?: string): void;
   metadataError(): void;
+  /** Someone else entered this room. Only their display name is shared. */
+  joined?(person: {userId: string; name: string}): void;
 }
 
 export interface ChatService {

@@ -1,6 +1,6 @@
 import {
   AreaCode, ChannelType, ConnectionStatus, ConnectionStatusHandler, Helper, MessageHandler, MessageType,
-  NCEngine, OpenChannel, OpenChannelHandler, OpenChannelMetadataOperationType, SendTextMessageParams,
+  NCEngine, OpenChannel, OpenChannelHandler, OpenChannelMetadataOperationType, OpenChannelParticipantActionType, SendMessageParams, SendTextMessageParams,
 } from '@nexconn/chat';
 import { NCCallEngine } from '@nexconn/call';
 import { setupCalls } from './calls';
@@ -24,10 +24,15 @@ function decode(m: Message, roomId: string): ChatMessage | undefined {
 export function createNexconnChat(appKey: string, region: keyof typeof AreaCode): ChatService {
   NCCallEngine.install();
   NCEngine.initialize({appKey, areaCode:AreaCode[region]});
+  // A transient "I joined" signal. Open channels here do not push participant
+  // join actions, so each visitor announces their own entry; it is not stored or counted.
+  const JOIN_TYPE = 'nearby:Join';
+  NCEngine.registerCustomMessages([{messageType:JOIN_TYPE, isPersisted:false, isCounted:false, isStatusMessage:true}]);
   let offerCall: ReturnType<typeof setupCalls> | undefined;
   let me: ChatIdentity;
   let channel: OpenChannel | null = null;
   let roomId = '';
+  let enteredAt = Number.POSITIVE_INFINITY;
   let events: RoomEvents | null = null;
   let values: Record<string,string> = {};
   let version = 0;
@@ -49,7 +54,18 @@ export function createNexconnChat(appKey: string, region: keyof typeof AreaCode)
       events?.presence(response.participantCount);
       void sync(channel);
     },
-    onParticipantChanged({channelId,participantCount}) { if (channelId === channel?.channelId) events?.presence(participantCount); },
+    onParticipantChanged({channelId,participantCount,actions}) {
+      if (channelId !== channel?.channelId) return;
+      events?.presence(participantCount);
+      // Each visitor enters with their display name as "extra" (see join()), so a join
+      // can be announced by name without any extra message on the channel.
+      for (const action of actions ?? []) {
+        if (action.action !== OpenChannelParticipantActionType.ENTER || action.userId === me?.userId) continue;
+        let name = '';
+        try { name = String(JSON.parse(action.extra || '{}').name ?? ''); } catch { /* older clients send no name */ }
+        events?.joined?.({userId: action.userId, name: name.trim().slice(0, 40) || 'A neighbour'});
+      }
+    },
     onMetadataSynced({channelId}) { if (channelId === channel?.channelId) void sync(channel); },
     onMetadataChanged({changeInfo}) {
       for (const item of changeInfo) {
@@ -69,6 +85,14 @@ export function createNexconnChat(appKey: string, region: keyof typeof AreaCode)
     onMessageReceived({messages}) {
       for (const raw of messages) {
         if (raw.channelIdentifier.channelId !== channel?.channelId) continue;
+        if (raw.messageType === JOIN_TYPE) {
+          // Entering a channel replays recent messages; only announce joins after our own entry.
+          if (raw.senderUserId !== me?.userId && raw.sentTime >= enteredAt - 5_000) {
+            const name = String((raw.content as {name?: unknown})?.name ?? '').trim().slice(0, 40);
+            events?.joined?.({userId: raw.senderUserId, name: name || 'A neighbour'});
+          }
+          continue;
+        }
         const msg = decode(raw, roomId);
         if (msg) events?.message(msg);
       }
@@ -101,11 +125,16 @@ export function createNexconnChat(appKey: string, region: keyof typeof AreaCode)
       channel = new OpenChannel(channelId);
       roomId = room.id;
       events = callbacks; values = {};
-      const r = await channel.enterChannel({messageCount:30});
+      enteredAt = Date.now();
+      const r = await channel.enterChannel({messageCount:30, extra:JSON.stringify({name:me.name})});
       if (!r.isOk) throw new Error('Join failed (' + r.code + ')');
       if (r.data) callbacks.presence(r.data.participantCount);
       callbacks.availability(true);
       void sync(channel);
+      const hello = new SendMessageParams({name:me.name}, JOIN_TYPE);
+      hello.disableNotification = true;
+      hello.disableUpdateLastMessage = true;
+      void channel.sendMessage(hello).catch(() => undefined);
     },
     async leave() {
       const previous = channel;

@@ -268,6 +268,8 @@ function setChatOpen(open: boolean, route: PhonePanel = {type: 'chat'}) {
   document.body.classList.toggle('chat-open', open);
   if (open) { closeEvent(); messageInput.focus({ preventScroll: true }); }
 }
+// A "someone joined" toast or browser alert reopens the chat that was last open.
+addEventListener('nearby:open-chat', () => setChatOpen(true, chatRoute));
 
 function updateAttendance() {
   const item = activities.find(activity => activity.id === previewId);

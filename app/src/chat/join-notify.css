@@ -1,0 +1,28 @@
+/* Join notifications: a quiet log line, toasts, a launcher badge and the alerts toggle. */
+.message-system { align-self: center; margin: 6px auto 10px; padding: 3px 10px; width: fit-content; max-width: 90%;
+  border-radius: 999px; background: color-mix(in srgb, var(--accent, #decfff) 45%, transparent); color: var(--accent-ink, #402777);
+  font: 500 11.5px/1.4 Geist, sans-serif; text-align: center; }
+.message-system b { font-weight: 700; }
+
+.join-badge-host { position: relative; }
+.join-badge { position: absolute; top: -6px; right: -6px; min-width: 20px; height: 20px; padding: 0 5px; display: grid; place-items: center;
+  border-radius: 999px; background: #e5484d; color: #fff; font: 700 11px/1 Geist, sans-serif; box-shadow: 0 0 0 2px var(--panel, #fffefa); }
+.join-badge[hidden] { display: none; }
+
+.join-toasts { position: fixed; z-index: 60; right: var(--edge, 20px); bottom: 104px; display: flex; flex-direction: column; gap: 8px;
+  width: min(340px, calc(100vw - 24px)); pointer-events: none; }
+.join-toast { pointer-events: auto; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 8px;
+  padding: 10px 10px 10px 14px; border: 1px solid var(--line, #0001); border-left: 3px solid var(--accent-ink, #402777); border-radius: 10px;
+  background: var(--panel-solid, #fffefa); color: var(--ink, #1d1b22); box-shadow: 0 12px 30px #0002; font: 13px/1.35 Geist, sans-serif;
+  animation: join-in .25s ease-out; }
+.join-toast b { font-weight: 700; }
+.join-toast button { border: 0; border-radius: 6px; padding: 6px 10px; background: var(--accent, #decfff); color: var(--accent-ink, #402777);
+  font: 600 12px Geist, sans-serif; cursor: pointer; }
+.join-toast .join-toast-x { padding: 2px 6px; background: transparent; color: var(--dim, #6b6676); font-size: 16px; }
+@keyframes join-in { from { opacity: 0; transform: translateY(6px); } }
+
+.join-alerts { border: 0; background: transparent; color: var(--accent-ink, #402777); font: 500 11px Geist, sans-serif;
+  text-decoration: underline; text-underline-offset: 2px; cursor: pointer; padding: 0; white-space: nowrap; }
+
+@media (max-width: 720px) { .join-toasts { left: 12px; right: 12px; width: auto; bottom: 150px; } }
+@media (prefers-reduced-motion: reduce) { .join-toast { animation: none; } }

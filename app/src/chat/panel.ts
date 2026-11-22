@@ -1,5 +1,6 @@
 import { createChat, type ChatMessage, type ChatRoom, type ChatService } from './index';
 import { guestId } from '../user';
+import { joinNotifier } from './join-notify';
 
 const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const messageBox = el('messages');
@@ -38,6 +39,7 @@ export function chatPanel(onState: (data: Record<string,string>) => void, onAvai
     nameButton.textContent = name;
     void enter(selected,true);
   };
+  const notifier = joinNotifier(messageBox);
   let busy = false;
   const drafts = new Map<string,string>();
 
@@ -107,6 +109,7 @@ export function chatPanel(onState: (data: Record<string,string>) => void, onAvai
             if (seq === sequence && room.id === area.id) { canWriteMetadata = true; onState(values); onAvailability(); }
           },
           presence: count => { if (seq === sequence) presence.textContent = count + ' in room'; },
+          joined: person => { if (seq === sequence) notifier.joined(person, room); },
           availability: (online, detail) => {
             if (seq !== sequence) return;
             ready = online; controls(); retry.hidden = online;

@@ -13,6 +13,13 @@ export function createMockChat(): ChatService {
     const entries = Object.keys(localStorage).filter(key => key.startsWith(prefix));
     events?.metadata(Object.fromEntries(entries.map(key => [key.slice(prefix.length), localStorage.getItem(key)!])));
   }
+  // Demo mode: tabs on this device tell each other when someone opens a room.
+  const presence = typeof BroadcastChannel === 'function' ? new BroadcastChannel('nearby.demo.presence') : null;
+  if (presence) presence.onmessage = ({data}) => {
+    if (data?.type === 'join' && room && data.roomId === room.id && data.userId !== me?.userId) {
+      events?.joined?.({userId: String(data.userId), name: String(data.name || 'A neighbour').slice(0, 40)});
+    }
+  };
   window.addEventListener('storage', ({key}) => {
     if (!room || !key) return;
     if (key.startsWith(metaPrefix(room.id))) syncMetadata();
@@ -31,6 +38,7 @@ export function createMockChat(): ChatService {
       history(next.id).forEach(callbacks.message);
       syncMetadata();
       callbacks.availability(true);
+      presence?.postMessage({type: 'join', roomId: next.id, userId: me.userId, name: me.name});
     },
     async leave() { room = null; events = null; },
     async send(id, text, file) {
