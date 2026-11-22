@@ -1,5 +1,6 @@
 import { ICON, KIND, esc } from '../ui/icons';
 import type { Place } from '../world/earth';
+import { sampleChat } from '../chat/samples';
 import { cityScope } from './scope';
 import './market.css';
 
@@ -43,6 +44,7 @@ function messageForm(label: string) {
 function renderMessages(list: HTMLElement, messages: Message[]) {
   const html = messages.map(message => `<li><b>${esc(message.who)}</b><span>${esc(message.text)}</span></li>`).join('');
   if (html === list.dataset.content) return;
+  if (messages.length && !list.childElementCount) list.previousElementSibling?.removeAttribute('open');
   list.innerHTML = html;
   list.dataset.content = html;
   list.scrollTop = list.scrollHeight;
@@ -53,7 +55,7 @@ function renderInquiries(card: HTMLElement, item: Listing) {
   const inquiries = item.inquiries || [];
   // The buyer can open a conversation before sending a first message.
   const threads = item.mine || item.closed ? inquiries : [inquiries[0] || { buyer: '', name: '', messages: [] }];
-  const existing = new Map(Array.from(container.querySelectorAll<HTMLDetailsElement>('details')).map(detail => [detail.dataset.key!, detail]));
+  const existing = new Map(Array.from(container.querySelectorAll<HTMLDetailsElement>('.mk-inquiry')).map(detail => [detail.dataset.key!, detail]));
   for (const thread of threads) {
     const key = item.mine ? thread.buyer : 'self';
     let detail = existing.get(key);
@@ -61,7 +63,7 @@ function renderInquiries(card: HTMLElement, item: Listing) {
       detail = document.createElement('details');
       detail.className = 'mk-inquiry';
       detail.dataset.key = key;
-      detail.innerHTML = `<summary>${ICON.chat}<span></span></summary><div class="mk-inquiry-body"><ul aria-label="Private messages"></ul>${messageForm('Private message to ' + (item.mine ? thread.name : item.owner))}</div>`;
+      detail.innerHTML = `<summary>${ICON.chat}<span></span></summary><div class="mk-inquiry-body">${sampleChat('Inquiry', item.title)}<ul aria-label="Private messages"></ul>${messageForm('Private message to ' + (item.mine ? thread.name : item.owner))}</div>`;
       container.append(detail);
     }
     existing.delete(key);
@@ -87,7 +89,7 @@ function createCard(item: Listing) {
     <div class="mk-byline"><span>${item.mine ? 'Your listing' : 'Listed by ' + esc(item.owner)}</span>${item.sample ? '<span class="mk-sample" title="A sample so you can try the marketplace. Nothing is really for sale.">Sample listing</span>' : ''}<span class="mk-badge"></span></div>
     <div class="mk-terms"><p></p><button type="button" class="mk-secondary mk-action" hidden></button><button type="button" class="mk-secondary mk-close-listing" data-action="close" hidden>Close listing</button><button type="button" class="mk-report" data-action="report" hidden>Report</button></div>
     <div class="mk-inquiries"></div>
-    <section class="mk-private" hidden><h4>${ICON.lock} Private pickup chat</h4><p class="mk-recipient"></p><ul aria-label="Pickup messages"></ul>
+    <section class="mk-private" hidden><h4>${ICON.lock} Private pickup chat</h4><p class="mk-recipient"></p>${sampleChat('Pickup', item.title)}<ul aria-label="Pickup messages"></ul>
       ${messageForm('Message about ' + item.title)}</section>`;
   return card;
 }

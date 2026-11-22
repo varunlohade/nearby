@@ -261,6 +261,7 @@ function openMapConversation(id:string,title:string,kind:string) {
 
 let chatRoute: PhonePanel = {type: 'chat'};
 function setChatOpen(open: boolean, route: PhonePanel = {type: 'chat'}) {
+  if (!open) chat.stopVoice();
   chatRoute = route;
   if (open && document.body.classList.contains('roam-open')) document.body.append(chatPanel);
   else if (chatPanel.parentElement === document.body) $('#app').append(chatPanel);
@@ -374,6 +375,7 @@ async function landAt(nextPlace: Place) {
   arrival.hidden = false;
   arrival.classList.remove('hidden');
   activityPanel.classList.add('hidden');
+  chat.stopVoice();
   chatPanel.classList.add('hidden');
   setChatOpen(false);
   mobileChat.classList.add('hidden');
@@ -522,6 +524,7 @@ globeButton.onclick = async () => {
   document.body.classList.remove('on-map');
   arrival.hidden = false;
   activityPanel.classList.add('hidden');
+  chat.stopVoice();
   chatPanel.classList.add('hidden');
   setChatOpen(false);
   mobileChat.classList.add('hidden');

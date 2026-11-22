@@ -396,3 +396,8 @@ h1, h2, p { margin: 0; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+.sample-chat { margin: 0 0 12px; padding: 9px 12px; border-inline-start: 2px solid currentColor; font-size: 13px; }
+.sample-chat summary { cursor: pointer; font-weight: 600; }
+.sample-chat p { margin: 7px 0 0; line-height: 1.45; }
+.sample-chat b { margin-inline-end: 4px; }

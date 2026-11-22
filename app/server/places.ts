@@ -14,6 +14,7 @@
 
 import { createHmac, randomBytes } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { visitor } from './identity.js';
 import { createPrivate, privateRoom } from './private-rooms.js';
 import { allow, clientIp, getStore } from './store.js';
 
@@ -46,7 +47,7 @@ async function load(): Promise<Created[]> {
 }
 
 // ---------------------------------------------------------------- audio relay
-interface PeerInfo { name: string; seen: number; role?: 'speaker' | 'listener' }
+interface PeerInfo { owner?: string; name: string; seen: number; role?: 'speaker' | 'listener' }
 const isListener = (info: PeerInfo) => info.role === 'listener';
 const peersKey = (id: string) => `aud:${id}:peers`;
 const inboxKey = (id: string, peer: string) => `aud:${id}:in:${peer}`;
@@ -152,11 +153,13 @@ export function placesApi(turnUrls='', turnSecret='') {
       }
 
       // Audio: join (Server-Sent Events stream of the handshake).
-      const audio = url.pathname.match(/^\/api\/audio\/(c[a-f0-9]{12})\/(stream|signal|leave)$/);
+      const audio = url.pathname.match(/^\/api\/audio\/([cp][a-f0-9]{12}|g[a-f0-9]{64})\/(stream|signal|leave)$/);
       if (audio) {
         const [, id, action] = audio;
-        const item = (await load()).find(c => c.id === id && c.kind === 'audio');
-        if (!item) return send(404, { error: 'This audio session has ended.' });
+        const item = id.startsWith('g') ? undefined : (await load()).find(c => c.id === id);
+        if (!id.startsWith('g') && !item) return send(404, { error: 'This audio session has ended.' });
+        const who = await visitor(req, res);
+        if (id.startsWith('p') && !await getStore().hget('private:keys:' + id, who.id)) return send(403, { error: 'Room approval required.' });
         if (action === 'stream' && req.method === 'GET') {
           const peer = clean(url.searchParams.get('peer'), 40);
           // Listen-only peers receive audio but never send it; everyone sees them as "(listening)".
@@ -166,15 +169,16 @@ export function placesApi(turnUrls='', turnSecret='') {
           if (!/^[a-z0-9-]{8,40}$/i.test(peer)) return send(400, { error: 'Bad peer id' });
           const store = getStore();
           let known = await peersOf(id);
+          if (known[peer]?.owner && known[peer].owner !== who.id) return send(403, {error: 'Peer belongs to another visitor.'});
           if (!known[peer]) {
             const speakers = Object.values(known).filter(p => !isListener(p)).length;
             if (Object.keys(known).length >= MAX_PEERS) return send(409, { error: `This session is full (${MAX_PEERS} people).` });
             if (role === 'speaker' && speakers >= MAX_AUDIO) return send(409, { error: `This session is full (${MAX_AUDIO} speakers). You can still listen.` });
           }
           const rejoining = !!known[peer];
-          const me: PeerInfo = { name, seen: Date.now(), role };
+          const me: PeerInfo = { owner: who.id, name, seen: Date.now(), role };
           await store.hset(peersKey(id), peer, me);
-          if (item.expires < Date.now() + 3600000) await store.hset('places', id, { ...item, expires: Date.now() + 3600000 });
+          if (item?.kind === 'audio' && item.expires < Date.now() + 3600000) await store.hset('places', id, { ...item, expires: Date.now() + 3600000 });
           res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
           delete known[peer];
           push(res, 'welcome', { rejoin: rejoining, peers: Object.entries(known).map(([p, info]) => ({ peer: p, name: info.name, role: info.role ?? 'speaker' })) });
@@ -210,11 +214,14 @@ export function placesApi(turnUrls='', turnSecret='') {
           const from = String(body.from), to = String(body.to);
           const peers = await peersOf(id);
           if (!peers[to] || !peers[from]) return send(404, { error: 'Peer left' });
+          if (peers[from].owner && peers[from].owner !== who.id) return send(403, {error: 'Peer belongs to another visitor.'});
           await getStore().rpush(inboxKey(id, to), { from, data: body.data }, 120);
           return send(200, { ok: true });
         }
         if (action === 'leave' && req.method === 'POST') {
           const body = await readJson(req, 2000);
+          const peer = await getStore().hget<PeerInfo>(peersKey(id), String(body.peer));
+          if (peer?.owner && peer.owner !== who.id) return send(403, {error: 'Peer belongs to another visitor.'});
           await getStore().hdel(peersKey(id), String(body.peer));
           return send(200, { ok: true });
         }

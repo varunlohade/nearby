@@ -1,4 +1,6 @@
+import { groupVoice } from './group-voice';
 import { createChat, type ChatMessage, type ChatRoom, type ChatService } from './index';
+import { sampleChat } from './samples';
 import { guestId } from '../user';
 import { joinNotifier } from './join-notify';
 
@@ -16,6 +18,7 @@ export function chatPanel(onState: (data: Record<string,string>) => void, onAvai
   let identity = {userId:guestId(), name:localStorage.getItem('nearby.displayName') || ''};
   if (!identity.name || identity.name === 'You') identity.name = 'Neighbor ' + identity.userId.slice(-4).toUpperCase();
   let selected: ChatRoom;
+  const stopVoice = groupVoice(el('chat-voice'), () => selected.id.replace(/^nearby_(c[a-f0-9]{12})$/, '$1'), () => identity.name);
   let area: ChatRoom;
   let sequence = 0;
   let switching = Promise.resolve();
@@ -50,6 +53,7 @@ export function chatPanel(onState: (data: Record<string,string>) => void, onAvai
   }
   function append(m: ChatMessage) {
     if (m.roomId !== selected?.id || messageBox.querySelector('[data-id="' + CSS.escape(m.id) + '"]')) return;
+    if (!messageBox.querySelector('[data-id]')) messageBox.querySelector('details')?.removeAttribute('open');
     const mine = m.userId === identity.userId;
     const div = document.createElement('div');
     div.className = 'message' + (mine ? ' mine' : '');
@@ -60,9 +64,9 @@ export function chatPanel(onState: (data: Record<string,string>) => void, onAvai
     if (!mine && service?.offerCall) {
       const call = document.createElement('button');
       call.type = 'button'; call.className = 'call-author';
-      call.textContent = m.name + ' · Call';
-      call.title = call.ariaLabel = 'Voice or video call with ' + m.name;
-      call.onclick = () => service?.offerCall?.(m.userId,m.name);
+      call.textContent = m.name + ' · Invite to voice call';
+      call.title = call.ariaLabel = 'Invite ' + m.name + ' to a voice call';
+      call.onclick = () => service?.offerCall?.(m.userId,m.name,true);
       author.append(call);
     } else author.textContent = m.name;
     const time = document.createElement('time');
@@ -85,6 +89,7 @@ export function chatPanel(onState: (data: Record<string,string>) => void, onAvai
   function enter(room: ChatRoom, force = false) {
     if (!force && selected?.id === room.id) return switching;
     if (selected) drafts.set(selected.id, field.value);
+    stopVoice();
     selected = room;
     field.value = drafts.get(room.id) || '';
     const seq = ++sequence;
@@ -95,7 +100,8 @@ export function chatPanel(onState: (data: Record<string,string>) => void, onAvai
     el('room-title').textContent = room.title;
     el('chat-panel').setAttribute('aria-label',room.title);
     field.placeholder = room.id === area.id ? 'Say hi to your area…' : room.kind ? 'Message this ' + room.kind.toLowerCase() + '…' : 'Message this event…';
-    messageBox.replaceChildren(); status.textContent = 'Connecting…';
+    messageBox.innerHTML = sampleChat(room.id === area.id ? 'Area' : room.kind ?? 'Event', room.title);
+    status.textContent = 'Connecting…';
     switching = switching.then(async () => {
       if (seq !== sequence) return;
       try {
@@ -151,7 +157,7 @@ export function chatPanel(onState: (data: Record<string,string>) => void, onAvai
     const seq = sequence;
     earlier.disabled = true;
     const top = messageBox.scrollTop, height = messageBox.scrollHeight;
-    const first = messageBox.firstElementChild as HTMLElement | null;
+    const first = messageBox.querySelector<HTMLElement>('[data-id]');
     try {
       const page = await service.earlier(selected.id, first ? Number(first.dataset.at) : 0);
       if (seq !== sequence) return;
@@ -166,9 +172,10 @@ export function chatPanel(onState: (data: Record<string,string>) => void, onAvai
   fileInput.onchange = () => { const file = fileInput.files?.[0]; fileInput.value = ''; if (file) void send(file); };
   retry.onclick = () => { void enter(selected,true); };
   return {
+    stopVoice,
     get user() { return identity; },
     get canCall() { return Boolean(service?.offerCall && ready); },
-    callUser(id:string, name:string) { service?.offerCall?.(id,name); },
+    callUser(id:string, name:string) { service?.offerCall?.(id,name,true); },
     get areaReady() { return ready && canWriteMetadata && selected?.id === area?.id; },
     setArea(room: ChatRoom) { area = room; return enter(room,true); },
     openArea() { if (area) return enter(area); },

@@ -67,7 +67,7 @@ export function setupCalls() {
   async function start(withVideo: boolean) {
     video = withVideo;
     const seq = ++generation;
-    draw('ringing','Calling…');
+    draw('ringing','Waiting for them to accept…');
     try {
       const result = await engine.startCall({calleeIds:[peer],callType:NCCallType.SINGLE,
         mediaType: video ? NCCallMediaType.AUDIO_VIDEO : NCCallMediaType.AUDIO});
@@ -141,10 +141,11 @@ export function setupCalls() {
     if (phase === 'incoming' && action === 'accept') void accept();
     if (phase === 'choose' && (action === 'voice' || action === 'video')) void start(action === 'video');
   });
-  return (id: string, name: string) => {
+  return (id: string, name: string, voiceInvite = false) => {
     if (dialog.open) return;
     peer = id; video = false;
     title.textContent = 'Call ' + name;
+    if (voiceInvite) { void start(false); return; }
     draw('choose','They’ll receive an invitation.');
   };
 }

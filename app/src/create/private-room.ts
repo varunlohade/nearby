@@ -1,3 +1,5 @@
+import { groupVoice } from '../chat/group-voice';
+import { sampleChat } from '../chat/samples';
 // The server stores ciphertext and one RSA-wrapped room key per approved browser.
 const encode = (value: ArrayBuffer) => btoa(String.fromCharCode(...new Uint8Array(value)));
 const decode = (value: string) => Uint8Array.from(atob(value), (c) => c.charCodeAt(0));
@@ -61,6 +63,11 @@ export function openPrivateRoom(id: string, title: string, name: string) {
     form = d.querySelector('form')!,
     input = form.querySelector('input')!,
     status = d.querySelector('p')!;
+  const voice = document.createElement('div');
+  voice.className = 'group-voice';
+  voice.hidden = true;
+  controls.before(voice);
+  const stopVoice = groupVoice(voice, () => id, () => name);
   let key: CryptoKey | undefined,
     timer = 0,
     seq = 0,
@@ -115,7 +122,7 @@ export function openPrivateRoom(id: string, title: string, name: string) {
       if (view !== next) {
         view = next;
         controls.replaceChildren();
-        form.hidden = !key;
+        form.hidden = voice.hidden = !key;
         if (data.state === 'owner')
           controls.append(document.createTextNode('You approve join requests from this browser.'));
         if (data.state === 'guest')
@@ -169,6 +176,8 @@ export function openPrivateRoom(id: string, title: string, name: string) {
           }),
         );
         if (generation === seq) {
+          if (!list.previousElementSibling?.matches('.sample-chat')) list.insertAdjacentHTML('beforebegin', sampleChat('Chat room', title));
+          if (items.length && !list.childElementCount) list.previousElementSibling?.removeAttribute('open');
           list.replaceChildren(...items);
           log = snapshot;
           list.scrollTop = list.scrollHeight;
@@ -206,6 +215,7 @@ export function openPrivateRoom(id: string, title: string, name: string) {
     }
   };
   d.onclose = () => {
+    stopVoice();
     seq++;
     clearTimeout(timer);
     d.remove();

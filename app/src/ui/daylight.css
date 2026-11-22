@@ -437,3 +437,32 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
   .arrival .landing-features { display: none; }
   .arrival .landing { margin-top: 2px; }
 }
+
+.topbar .map-visibility { display: none; }
+.on-map .topbar .map-visibility {
+  display: inline-flex; flex: none; align-items: center; gap: 5px;
+  min-height: 44px; padding: 0 9px; border-radius: 12px;
+  background: var(--panel); color: var(--text); border: 1px solid var(--line);
+  font-size: 13px; font-weight: 600; white-space: nowrap;
+}
+
+.group-voice:not([hidden]) { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 5px 12px; }
+.group-voice button { border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--text); padding: 6px 10px; cursor: pointer; }
+.group-voice span { font-size: 12px; overflow-wrap: anywhere; }
+
+#chat-panel { grid-template-rows: auto auto minmax(0,1fr) auto auto; }
+#chat-panel:has(.history-bar:not([hidden])) { grid-template-rows: auto auto auto minmax(0,1fr) auto auto; }
+.cm-panel:has(.neighbourhood-body) { bottom: auto; width: min(370px, 36vw); max-height: calc(100dvh - 128px); }
+.cm-panel:has(.neighbourhood-body) .cm-panel-head { align-items: flex-start; padding: 16px; }
+.cm-panel:has(.neighbourhood-body) .cm-panel-head small { color: var(--dim); }
+.neighbourhood-views { margin: 12px 16px; }
+.neighbourhood-body { padding: 0 16px 16px; }
+.neighbourhood-body .nearby-person-list li { display: grid; grid-template-columns: 32px minmax(0,1fr) auto; gap: 8px; }
+.nearby-person-list .cm-avatar { width: 32px; height: 32px; }
+.nearby-person-name { display: grid; gap: 3px; overflow-wrap: anywhere; }
+.nearby-person-list button[data-person] { min-height: 44px; border-radius: 10px; color: white; background: var(--primary); }
+@media (max-width: 720px) {
+  .cm-panel:has(.neighbourhood-body) { top: auto; bottom: max(12px,env(safe-area-inset-bottom)); width: auto; max-height: 68dvh; }
+}
+.cm-panel:has(.neighbourhood-body) h3 { margin: 0 0 3px; font-size: 20px; }
+.cm-panel:has(.neighbourhood-body) .cm-x { width: 44px; height: 44px; }

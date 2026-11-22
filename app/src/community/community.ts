@@ -61,8 +61,7 @@ export function mountCommunities(options: Options) {
   const section = document.createElement('section');
   section.className = 'cm-section';
   section.innerHTML = `
-    <div class="cm-neighbours"><button type="button" class="cm-near-count"><i></i><span>Neighbours nearby</span></button>
-      <label class="cm-toggle"><input type="checkbox" /><span>Show me</span></label></div>
+    <div class="cm-neighbours"><button type="button" class="cm-near-count"><i></i><span>Neighbours nearby</span></button></div>
     <header class="cm-head"><h3>Communities</h3><span class="cm-count">0</span><button type="button" class="cm-new">+ Start</button><button type="button" class="cm-agents-open">🤖 Agents</button></header>
     <div class="cm-list"></div>`;
   const head = document.querySelector('#activity-panel .nearby-head');
@@ -292,7 +291,7 @@ export function mountCommunities(options: Options) {
   }
 
   // ------------------------------------------------------------ neighbours nearby (opt-in)
-  const toggle = section.querySelector<HTMLInputElement>('.cm-toggle input')!;
+  const toggle = document.querySelector<HTMLInputElement>('.map-visibility input')!;
   const nearButton = section.querySelector<HTMLButtonElement>('.cm-near-count')!;
   const mobileCount = document.createElement('button');
   mobileCount.type = 'button';
@@ -330,26 +329,19 @@ export function mountCommunities(options: Options) {
       `<li><b>${esc(kind === 'custom' ? 'Custom agent' : AGENT_KINDS[kind] || 'Agent')}</b> <span>${count}</span></li>`).join('');
     const markup = agentsSelected
       ? `<p class="cm-lede">Agents active within 5 km in the last 15 minutes.</p><ul class="cm-members">${agentRows || '<li class="cm-empty">No recent agent activity here.</li>'}</ul>`
-      : `<p class="cm-lede">${esc(counts())} within 5 km. People choose to appear here. Agents have used a local tool in the past 15 minutes.</p>
-      <ul class="cm-members">${rows.map(n => `<li><span class="cm-avatar">${esc(n.name.slice(0,1))}</span>
-        <b>${esc(n.name)}</b><small>~${n.km} km</small>
-        <button type="button" data-person="${esc(n.id)}" ${n.callId && options.canCall() ? '' : 'disabled'}>${n.callId && options.canCall() ? 'Call' : 'Call unavailable'}</button>
-        <button type="button" data-hi="${esc(n.name)}">Say hi</button></li>`).join('') || '<li class="cm-empty">No other people visible here yet.</li>'}</ul>`;
+      : `<ul class="cm-members nearby-person-list">${rows.map(n => `<li><span class="cm-avatar">${esc(n.name.slice(0,1))}</span>
+        <span class="nearby-person-name"><b>${esc(n.name)}</b><small>About ${n.km} km away</small></span>
+        <button type="button" data-person="${esc(n.id)}" ${n.callId && options.canCall() ? '' : 'disabled'}>${n.callId && options.canCall() ? 'Invite to voice call' : 'Voice unavailable'}</button></li>`).join('') || '<li class="cm-empty">No neighbours to call here yet.</li>'}</ul>`;
     if (body.dataset.rendered !== markup) { body.innerHTML = markup; body.dataset.rendered = markup; }
-    const check = sheet.querySelector<HTMLInputElement>('[data-show-me]');
-    if (check) check.checked = toggle.checked;
   }
   function showNeighbours(key = 'all') {
     listing = key; agentsSelected = false;
     sheet.hidden = false; openId = '';
     document.body.classList.add('cm-open');
     sheet.style.removeProperty('--cm');
-    sheet.innerHTML = `<header class="cm-panel-head"><h3>People nearby</h3><button type="button" class="cm-x" aria-label="Close">×</button></header>
-      <label class="neighbourhood-visibility"><input type="checkbox" data-show-me> Show me on the map for calls</label>
-      <p class="cm-lede">Your pin shows your approximate area.</p>
+    sheet.innerHTML = `<header class="cm-panel-head"><div><h3>People nearby</h3><small>Within 5 km</small></div><button type="button" class="cm-x" aria-label="Close">×</button></header>
       <div class="neighbourhood-views" aria-label="Neighbourhood activity"><button type="button" data-view="people">People</button><button type="button" data-view="agents">Agents</button></div><div class="neighbourhood-body"></div>`;
     sheet.querySelector<HTMLButtonElement>('.cm-x')!.onclick = closeSheet;
-    sheet.querySelector<HTMLInputElement>('[data-show-me]')!.onchange = () => toggle.click();
     renderNeighbours();
     void beat();
   }
@@ -360,10 +352,6 @@ export function mountCommunities(options: Options) {
     } else if (button?.dataset.person) {
       const person = neighbours.find(n => n.id === button.dataset.person);
       if (person?.callId && options.canCall()) options.callUser(person.callId, person.name);
-    } else if (button?.dataset.hi) {
-      closeSheet(); document.querySelector<HTMLButtonElement>('#mobile-chat')?.click();
-      const field = document.querySelector<HTMLInputElement>('#message-input');
-      if (field) { field.value = '@' + button.dataset.hi + ' hi!'; field.focus(); }
     }
   });
   const cell = (n: Neighbour) => n.lat + ',' + n.lng;
@@ -420,6 +408,11 @@ export function mountCommunities(options: Options) {
     }
   }
   toggle.onchange = async () => {
+    if (toggle.checked && !window.confirm('This makes you visible to everyone on the map, and anyone can contact you. Show me on the map?')) {
+      toggle.checked = false;
+      renderNeighbours();
+      return;
+    }
     localStorage.setItem('nearby.presence', toggle.checked ? 'on' : 'off');
     published = ''; ++refreshVersion;
     if (!toggle.checked) {

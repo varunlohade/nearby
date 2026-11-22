@@ -36,6 +36,7 @@
         <span class="place-chip-coords mono" id="place-pill-coords"></span>
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m5 6.5 3 3 3-3"/></svg>
       </button>
+      <label class="cm-toggle map-visibility"><input type="checkbox" aria-label="Show me on the map"><span>Show me</span></label>
       <div class="top-actions">
         <button id="phone-more" type="button" class="round-button" aria-label="More map options" popovertarget="phone-options">•••</button>
         <button class="round-button hidden" id="globe-button" type="button" aria-label="Back to globe" title="Back to globe">
@@ -98,6 +99,7 @@
             <svg viewBox="0 0 24 24"><path d="M7 7l10 10M17 7 7 17"/></svg>
           </button>
         </header>
+        <div class="group-voice" id="chat-voice"></div>
         <div class="history-bar" id="history-bar" hidden><button type="button" id="earlier">Earlier messages</button></div>
         <div class="messages" id="messages" role="log" aria-label="Messages"></div>
         <form class="composer" id="composer">
