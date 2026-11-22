@@ -60,3 +60,65 @@ export async function screen(kind: string, text: string): Promise<Verdict> {
     return { allowed: false, category: 'unavailable', reason: 'The safety check is unavailable. Try again in a minute.' };
   }
 }
+
+// ---------------------------------------------------------------- marketplace
+// Listings and listing messages from people (not agents) are screened too.
+
+const MARKET_SYSTEM = `You review listings and buyer–seller messages in the neighbourhood marketplace of "nearby", a map app where neighbours sell, swap and give away second-hand things locally. You do not answer; you only decide whether the text may be published.
+
+Block it if it is:
+- scam: advance-fee or "pay first" requests, gift cards, wire transfers, crypto payments, asking to move off the app to pay, prices far too good to be true for valuable items (for example a new phone for a tiny fraction of its value), phishing links, fake shipping or deposit schemes;
+- prohibited: weapons or ammunition, drugs or drug paraphernalia, prescription medicines, alcohol or tobacco sales, counterfeit or replica goods, stolen goods, live animals, adult or sexual services, human services that are illegal, government IDs or documents, hacked accounts;
+- personal_data: other people's phone numbers, addresses, ID numbers or private details (the seller sharing a meeting area is fine);
+- abuse: hate, harassment, threats or slurs;
+- spam: advertising for a business, repeated text, link farms, nonsense or a price that makes no sense for the item.
+
+Allow ordinary second-hand listings and polite messages: furniture, bikes, books, electronics at plausible prices, clothes, plants, kids' things, giveaways, swaps, questions about condition or pickup time. Short or informal text is fine. If unsure and nothing above clearly applies, allow it.
+
+When you block, give one short, friendly sentence (under 25 words) telling the person what to change.`;
+
+const MARKET_SCHEMA = {
+  type: 'object', additionalProperties: false, required: ['verdict', 'category', 'reason'],
+  properties: {
+    verdict: { type: 'string', enum: ['allow', 'block'] },
+    category: { type: 'string', enum: ['ok', 'scam', 'prohibited', 'personal_data', 'abuse', 'spam'] },
+    reason: { type: 'string' },
+  },
+};
+
+function marketHeuristic(text: string): Verdict {
+  const t = text.toLowerCase();
+  if ((t.match(/https?:\/\//g) ?? []).length > 1) return { allowed: false, category: 'spam', reason: 'Remove the links: describe the item instead.' };
+  if (/gift ?cards?|western union|moneygram|bitcoin|crypto|usdt|pay (?:me )?(?:first|in advance|upfront)|advance payment|deposit first|wire transfer/.test(t)) {
+    return { allowed: false, category: 'scam', reason: 'Asking for payment up front, by gift card, crypto or wire looks like a scam. Agree to pay when you meet.' };
+  }
+  if (/\b(?:gun|pistol|rifle|ammo|ammunition|cocaine|heroin|meth|weed|cannabis|mdma|counterfeit|replica|fake passport|escort)\b/.test(t)) {
+    return { allowed: false, category: 'prohibited', reason: 'That item or service cannot be listed on nearby.' };
+  }
+  return { allowed: true, category: 'ok', reason: '' };
+}
+
+/** Check a marketplace listing or listing message written by a person. Fails closed. */
+export async function screenListing(kind: 'listing' | 'message', text: string): Promise<Verdict> {
+  const quick = marketHeuristic(text);
+  if (!quick.allowed || !client) return quick;
+  try {
+    const response = await client.messages.create({
+      model: 'claude-haiku-5-5',
+      max_tokens: 2000,
+      output_config: { effort: 'low', format: { type: 'json_schema', schema: MARKET_SCHEMA } },
+      system: MARKET_SYSTEM,
+      messages: [{ role: 'user', content: `<marketplace_${kind}>\n${text}\n</marketplace_${kind}>` }],
+    });
+    if (response.stop_reason === 'refusal') return { allowed: false, category: 'prohibited', reason: 'This cannot be published on nearby.' };
+    const raw = response.content.find((b): b is Anthropic.TextBlock => b.type === 'text')?.text ?? '';
+    const v = JSON.parse(raw) as { verdict: string; category: string; reason: string };
+    // Keep the reason short, ending on a whole word.
+    let reason = String(v.reason ?? '').trim();
+    if (reason.length > 220) reason = reason.slice(0, 220).replace(/\s+\S*$/, '') + '…';
+    return { allowed: v.verdict === 'allow', category: v.category, reason };
+  } catch (error) {
+    console.error('[guard] market', (error as Error).message);
+    return { allowed: false, category: 'unavailable', reason: 'The safety check is unavailable. Try again in a minute.' };
+  }
+}

@@ -10,6 +10,7 @@ interface Listing {
   id: string; title: string; price: string; description: string; venue: string; owner: string;
   created: number; revision: number; mine: boolean; position: number; count: number; holder?: string;
   until: number; holdToken?: string; closed: boolean; sold?: boolean; dibs?: boolean; messages: Message[]; inquiries?: Inquiry[];
+  /** Seeded sample listing. */ sample?: boolean; /** Hidden after reports (only the owner still sees it). */ hidden?: boolean; reported?: boolean;
 }
 
 function actionFor(item: Listing) {
@@ -22,6 +23,7 @@ function actionFor(item: Listing) {
 }
 
 function statusFor(item: Listing) {
+  if (item.hidden) return 'Hidden after reports';
   if (item.closed) return (item.sold ?? (item.count > 0)) ? 'Sold' : 'Closed';
   if (item.position === 0) return 'You have dibs';
   if (item.position > 0) return `Waitlist · #${item.position}`;
@@ -82,8 +84,8 @@ function createCard(item: Listing) {
   card.innerHTML = `<div class="mk-card-head"><h3 tabindex="-1">${esc(item.title)}</h3><strong class="mk-price">${esc(item.price)}</strong></div>
     <div class="mk-place">${ICON.pin}<span>${esc(item.venue)}</span></div>
     ${item.description ? `<p class="mk-description">${esc(item.description)}</p>` : ''}
-    <div class="mk-byline"><span>${item.mine ? 'Your listing' : 'Listed by ' + esc(item.owner)}</span><span class="mk-badge"></span></div>
-    <div class="mk-terms"><p></p><button type="button" class="mk-secondary mk-action" hidden></button><button type="button" class="mk-secondary mk-close-listing" data-action="close" hidden>Close listing</button></div>
+    <div class="mk-byline"><span>${item.mine ? 'Your listing' : 'Listed by ' + esc(item.owner)}</span>${item.sample ? '<span class="mk-sample" title="A sample so you can try the marketplace. Nothing is really for sale.">Sample listing</span>' : ''}<span class="mk-badge"></span></div>
+    <div class="mk-terms"><p></p><button type="button" class="mk-secondary mk-action" hidden></button><button type="button" class="mk-secondary mk-close-listing" data-action="close" hidden>Close listing</button><button type="button" class="mk-report" data-action="report" hidden>Report</button></div>
     <div class="mk-inquiries"></div>
     <section class="mk-private" hidden><h4>${ICON.lock} Private pickup chat</h4><p class="mk-recipient"></p><ul aria-label="Pickup messages"></ul>
       ${messageForm('Message about ' + item.title)}</section>`;
@@ -95,7 +97,11 @@ function renderCard(card: HTMLElement, item: Listing) {
   const hadFocus = focused instanceof HTMLElement && card.contains(focused);
   const badge = card.querySelector<HTMLElement>('.mk-badge')!;
   badge.textContent = statusFor(item);
-  badge.dataset.tone = item.closed ? 'closed' : item.count ? 'held' : 'open';
+  badge.dataset.tone = item.hidden || item.closed ? 'closed' : item.count ? 'held' : 'open';
+  const report = card.querySelector<HTMLButtonElement>('.mk-report')!;
+  report.hidden = item.mine || item.closed || !!item.hidden;
+  report.disabled = !!item.reported;
+  report.textContent = item.reported ? 'Reported' : 'Report';
   const action = actionFor(item);
   const button = card.querySelector<HTMLButtonElement>('.mk-action')!;
   const ordinary = item.dibs === false;
@@ -109,8 +115,9 @@ function renderCard(card: HTMLElement, item: Listing) {
     button.classList.toggle('mk-secondary', action[0] !== 'claim');
   }
   const terms = card.querySelector('.mk-terms p')!;
-  terms.parentElement!.hidden = ordinary && !item.mine && !item.closed;
-  if (item.closed) terms.textContent = statusFor(item) === 'Sold' ? 'This item has been sold.' : 'The seller closed this listing.';
+  terms.parentElement!.hidden = false;
+  if (item.hidden) terms.textContent = 'Hidden after reports from neighbours. Only you can see it.';
+  else if (item.closed) terms.textContent = statusFor(item) === 'Sold' ? 'This item has been sold.' : 'The seller closed this listing.';
   else if (ordinary) terms.textContent = '';
   else if (!item.count) terms.textContent = 'Calling dibs holds this item for 15 minutes.';
   else {
@@ -151,7 +158,9 @@ export function mountMarket(getPlace: () => Place | undefined) {
       <label>Description <small>(optional)</small><textarea name="description" maxlength="360" rows="3" placeholder="Condition, size or other details"></textarea></label>
       <label class="mk-dibs"><input name="dibs" type="checkbox" aria-describedby="mk-dibs-help"> Enable Dibs</label>
       <p id="mk-dibs-help">Give the first buyer a 15-minute hold. Other buyers can join a waitlist.</p>
-      <div class="mk-form-actions"><button type="button" class="mk-secondary mk-cancel">Cancel</button><button class="mk-primary">Post listing</button></div></form>
+      <p class="mk-form-error" role="alert" hidden></p>
+      <div class="mk-form-actions"><button type="button" class="mk-secondary mk-cancel">Cancel</button><button class="mk-primary">Post listing</button></div>
+      <p class="mk-checked">Listings are checked for scams and prohibited items before they appear.</p></form>
     <p class="mk-network" role="status"></p><div class="mk-list"></div>
     <div class="mk-empty" hidden><span aria-hidden="true">${KIND.market.icon}</span><h3>No listings yet</h3><p>Have something to sell? List it for neighbours to find.</p></div></main>
     <p class="mk-feedback" role="status"></p></div>`;
@@ -250,12 +259,21 @@ export function mountMarket(getPlace: () => Place | undefined) {
         inquire: 'Message sent.',
         sold: 'Item marked as sold.',
         close: 'Listing closed.',
+        report: 'Thanks for reporting. Listings with several reports are hidden.',
       };
+      if (body.action === 'create') compose.querySelector<HTMLElement>('.mk-form-error')!.hidden = true;
       say(confirmations[String(body.action)]);
       if (body.action === 'claim') claimFeedbackId = data.id;
       onSuccess?.();
     } catch (error) {
-      if (session === generation) say(error instanceof Error ? error.message : 'Couldn’t save that change. Try again.', 'error');
+      const message = error instanceof Error ? error.message : 'Couldn’t save that change. Try again.';
+      if (session === generation) say(message, 'error');
+      // Detector rejections and other form errors also show next to the form.
+      if (session === generation && body.action === 'create') {
+        const note = compose.querySelector<HTMLElement>('.mk-form-error')!;
+        note.textContent = message;
+        note.hidden = false;
+      }
     } finally {
       if (session === generation) {
         writing = false;

@@ -3,6 +3,8 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { clean, readJson } from './communities.js';
 import { visitor, type Visitor } from './identity.js';
 import { allow, getStore, type Store } from './store.js';
+import { screenListing } from './guard.js';
+import { SAMPLE_OWNER, SAMPLE_REPLY, seedMarket } from './market-seed.js';
 
 type Input = Record<string, unknown>;
 interface Base { id: string; title: string; venue: string; owner: Visitor; created: number; revision: number }
@@ -14,6 +16,8 @@ interface Item extends Base {
   kind: 'item'; price: string; description: string; queue: Visitor[]; until: number;
   holdToken?: string; holdRevision?: number;
   lastRemovalRevision?: number; closed: boolean; messages: Message[];
+  /** Seeded sample listing (badged in the UI). */ sample?: boolean;
+  /** Visitors who reported it; three hide it from everyone but the owner. */ reporters?: string[]; hidden?: boolean;
 }
 interface Game extends Base {
   kind: 'game'; question: string; choices: string[]; picks: Record<string, number>;
@@ -108,6 +112,7 @@ function view(e: Entry, me: Visitor, now: number) {
   const inquiries = common.mine ? Object.values(threads) : threads[me.id] ? [threads[me.id]] : [];
   const participant = common.mine || position===0;
   return {...common,kind:e.kind,dibs:e.dibs ?? true,sold:e.sold ?? (e.closed && e.queue.length>0),
+    sample:e.sample===true,hidden:e.hidden===true,reported:(e.reporters ?? []).includes(me.id),
     inquiries:inquiries.map(({buyer,name,messages}) => ({buyer,name,messages:publicMessages(messages)})),
     holdToken:participant ? holdToken(e) : undefined,price:e.price,description:e.description,position,until:e.until,closed:e.closed,
     count:e.queue.length,holder:(common.mine || position===0) ? e.queue[0]?.name : undefined,messages:participant ? publicMessages(e.messages) : []};
@@ -137,11 +142,23 @@ function updateOrdinaryItem(item: Item, input: Input, me: Visitor) {
     thread = threads[me.id] ??= {buyer:randomUUID(), name:me.name, messages:[]};
     thread.name = me.name;
   }
-  return appendMessage(thread.messages, input, me);
+  const first = !thread.messages.length;
+  const result = appendMessage(thread.messages, input, me);
+  if (item.sample && first && result !== false) thread.messages.push({who:SAMPLE_OWNER.name, text:SAMPLE_REPLY});
+  return result;
 }
 function update(e: Entry,b: Input,me: Visitor,now: number) {
   const owner=e.owner.id===me.id;
   if (e.kind==='item') {
+    if (b.action==='report') {
+      if (owner) throw new Problem('You cannot report your own listing.',409);
+      const reporters = e.reporters ??= [];
+      if (reporters.includes(me.id)) return false;
+      reporters.push(me.id);
+      if (reporters.length>=3) e.hidden=true;
+      return;
+    }
+    if (e.hidden) throw new Problem('This listing was hidden after reports.',409);
     if (e.closed) throw new Problem('This listing is closed.',409);
     if (e.dibs === false) return updateOrdinaryItem(e,b,me);
     if (e.queue.length && e.holdRevision === undefined) e.holdRevision = e.revision;
@@ -154,7 +171,10 @@ function update(e: Entry,b: Input,me: Visitor,now: number) {
         throw new Problem('The reservation changed. Refresh and try again.',409);
       }
       e.queue.push(me);
-      if (e.queue.length===1) startHold(e,now+HOLD);
+      if (e.queue.length===1) {
+        startHold(e,now+HOLD);
+        if (e.sample) e.messages.push({who:SAMPLE_OWNER.name, text:SAMPLE_REPLY});
+      }
       return;
     }
     if (b.action==='leave' && !owner) {
@@ -238,7 +258,14 @@ export async function cityApi(req:IncomingMessage,res:ServerResponse,next:()=>vo
         throw new Problem('Listing changed. Please refresh.',409);
       }));
       const now=Date.now();
-      return send(200,{entries:entries.sort((a,b)=>b.created-a.created).map(e=>view(e,me,now))});
+      let visible=entries.filter(e=>!(e.kind==='item' && e.hidden && e.owner.id!==me.id));
+      if (match[1]==='market') {
+        const open=visible.filter(e=>e.kind==='item' && !e.closed).length;
+        if (await seedMarket(store,key,city,open).catch(error=>{console.error('[market] seed',error);return false;})) {
+          visible=Object.values(await store.hgetall<Entry>(key)).filter(e=>!(e.kind==='item' && e.hidden && e.owner.id!==me.id));
+        }
+      }
+      return send(200,{entries:visible.sort((a,b)=>b.created-a.created).map(e=>view(e,me,now))});
     }
     if (req.method!=='POST') throw new Problem('Method unavailable.',405);
     if (req.headers['content-type']?.split(';')[0].trim().toLowerCase() !== 'application/json') throw new Problem('JSON required.',415);
@@ -246,6 +273,18 @@ export async function cityApi(req:IncomingMessage,res:ServerResponse,next:()=>vo
     const b=await readJson(req).catch(()=>{throw new Problem('Invalid request.');});
     if (!b || typeof b!=='object' || typeof b.id!=='string' || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(b.id)) throw new Problem('Invalid listing or game.');
     if (!await allow('city:'+me.id,120,60,false)) throw new Problem('Please try again shortly.',429);
+    // Bad-listing detector: new listings and listing messages are screened before saving.
+    if (match[1]==='market' && (b.action==='create' || b.action==='inquire' || b.action==='message')) {
+      if (b.action==='create' && !await store.hget(key,b.id)) {
+        if (!await allow('list:'+me.id,20,86400,false)) throw new Problem('You have listed a lot today. Try again tomorrow.',429);
+        const text=['Title: '+clean(b.title,80),'Price: '+clean(b.price,30),'Pickup: '+clean(b.venue,100),'Description: '+clean(b.description,360)].join('\n');
+        const verdict=await screenListing('listing',text);
+        if (!verdict.allowed) throw new Problem(verdict.reason || 'This listing was not accepted.',422);
+      } else if (b.action!=='create') {
+        const verdict=await screenListing('message',clean(b.message,400));
+        if (!verdict.allowed) throw new Problem(verdict.reason || 'This message was not sent.',422);
+      }
+    }
     for (let attempt=0;attempt<25;attempt++) {
       let e=await store.hget<Entry>(key,b.id);
       const now=Date.now();
