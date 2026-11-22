@@ -144,6 +144,8 @@ class Roam {
   // Camera smoothing.
   private camPos = new THREE.Vector3();
   private camLook = new THREE.Vector3();
+  private camArm = 1;               // spring-arm length 0..1: walls pull it in at once, it eases back out
+  private camAim = new THREE.Vector3();
 
   // Audio venues.
   private audio?: { id: string; session: AudioSession; speaking: boolean };
@@ -902,7 +904,11 @@ class Roam {
       const hit = this.stream.pushOut(w.x, w.z, 0.4, this.tmp.hit); if (hit) { w.x += hit.dx; w.z += hit.dz; }
       return;
     }
-    if (performance.now() > this.dragUntil && h.speed > 0.4) this.camYaw.target = this.camYaw.position + wrap(h.heading - this.camYaw.position);
+    // GTA-style follow: the camera swings behind you only for the forward part of the
+    // stick. Side or back input keeps the camera still, so the walker runs straight across
+    // or toward the screen instead of circling (camera chasing a camera-relative input).
+    const push = Math.hypot(input.x, input.y), ahead = push > 0.1 ? Math.max(0, input.y / push) : 0;
+    if (performance.now() > this.dragUntil && h.speed > 0.4 && ahead > 0) this.camYaw.target = this.camYaw.position + wrap(h.heading - this.camYaw.position) * ahead;
     this.camYaw.simulate(dt);
     if (this.dragYaw) { this.camYaw.reset(this.camYaw.position + this.dragYaw); this.dragYaw = 0; }
     const yaw = this.camYaw.position;
@@ -1264,17 +1270,35 @@ class Roam {
     }
     const k = snap ? 1 : 1 - Math.exp(-dt * rate);
     this.camPos.lerp(want, k); this.camLook.lerp(look, k);
+    const cam = this.camera.position.copy(this.camPos), aim = this.camAim.copy(this.camLook);
     if (this.mode !== 'drone') {
-      const hit = this.stream.pushOut(this.camPos.x, this.camPos.z, 0.8, this.tmp.hit);
-      if (hit) { this.camPos.x += hit.dx; this.camPos.z += hit.dz; }
+      // Swing around the player, never through them, when the heading flips (a spin after a crash).
+      const reach = Math.hypot(want.x - x, want.z - z), ox = this.camPos.x - x, oz = this.camPos.z - z, d = Math.hypot(ox, oz);
+      if (d < reach * 0.35) {
+        const s = reach * 0.35 / (d > 0.01 ? d : 1), bx = d > 0.01 ? ox : want.x - x, bz = d > 0.01 ? oz : want.z - z;
+        this.camPos.x = x + bx * s; this.camPos.z = z + bz * s;
+      }
+      // Spring arm (as in game engines' third-person cameras): a wall between the player and
+      // the camera pulls the camera in front of it at once; when the view clears, the arm eases
+      // back out. The smoothed camPos stays where it wants to be, so a wall never drags the
+      // camera aside or traps it behind a building.
+      const len = Math.hypot(this.camPos.x - x, this.camPos.z - z);
+      const t = len > 0.5 ? this.stream.rayWall(x, z, this.camPos.x, this.camPos.z) : 1;
+      const fit = t < 1 ? clamp((t * len - 0.45) / len, 0.08, 1) : 1;
+      this.camArm = snap || fit < this.camArm ? fit : this.camArm + (fit - this.camArm) * (1 - Math.exp(-dt * 2.5));
+      // Pulled in close, look further ahead over the player's head instead of down at them.
+      const pull = 1 - this.camArm, ux = (this.camPos.x - x) / (len || 1), uz = (this.camPos.z - z) / (len || 1);
+      cam.set(x + ux * len * this.camArm, this.camPos.y + pull * 0.4, z + uz * len * this.camArm);
+      aim.x -= ux * pull * 3; aim.z -= uz * pull * 3;
+      const hit = this.stream.pushOut(cam.x, cam.z, 0.3, this.tmp.hit);
+      if (hit) { cam.x += hit.dx; cam.z += hit.dz; }
     }
-    this.camera.position.copy(this.camPos);
     if (this.shake > 0.01) {
       this.camera.position.x += (Math.random() - 0.5) * this.shake;
       this.camera.position.y += (Math.random() - 0.5) * this.shake * 0.6;
       this.shake *= Math.exp(-dt * 7);
     }
-    this.camera.lookAt(this.camLook);
+    this.camera.lookAt(aim);
     this.camera.updateProjectionMatrix();
   }
 
@@ -1551,6 +1575,25 @@ class Roam {
       place: (x: number, z: number, heading: number) => { this.driving?.place(x, z, heading); this.walker = { x, z, h: heading }; this.human?.place(x, z, heading); this.snapCamera(); },
       spots: () => this.spots.map(sp => ({ id: sp.id, name: sp.name, kind: sp.kind, x: sp.x, z: sp.z, live: sp.live })),
       position: () => this.position(),
+      /** Camera spring arm: length 0..1 and whether a wall hides the player. */
+      camera: () => { const [x, z] = this.position(), c = this.camera.position; return { arm: Number(this.camArm.toFixed(2)), clear: this.stream.rayWall(x, z, c.x, c.z) === 1, dist: Number(Math.hypot(c.x - x, c.z - z).toFixed(2)) }; },
+      /** Player car heading, speed and slide angle (degrees between nose and travel). */
+      car: () => { const v = this.driving; if (!v) return null; const s = Math.atan2(v.body.velocity.x, -v.body.velocity.z) - v.heading; return { heading: v.heading, speed: v.speed, slip: v.speed > 1 ? Math.round(Math.abs(Math.atan2(Math.sin(s), Math.cos(s))) * 180 / Math.PI) : 0, upright: v.upright }; },
+      /** On foot with your back to the nearest wall (tests the camera against walls). */
+      backToWall: () => {
+        this.setMode('walk');
+        const [x, z] = this.position();
+        let best: { h: number; d: number } | null = null;
+        for (let a = 0; a < 72; a++) {
+          const h = a / 72 * Math.PI * 2, t = this.stream.rayWall(x, z, x + Math.sin(h) * 40, z - Math.cos(h) * 40);
+          if (t < 1 && (!best || t * 40 < best.d)) best = { h, d: t * 40 };
+        }
+        if (!best) return false;
+        const d = best.d - 0.5, h = best.h + Math.PI;
+        const wx = x + Math.sin(best.h) * d, wz = z - Math.cos(best.h) * d;
+        this.walker = { x: wx, z: wz, h }; this.human?.place(wx, wz, h); this.camYaw.reset(h);
+        return { wallAt: Number(best.d.toFixed(1)) };
+      },
       pilotState: () => { const a = this.autopilot, v = this.driving; return a && v ? { n: a.points.length, i: a.i, target: a.points[a.i]?.map(Math.round), car: [Math.round(v.x), Math.round(v.z)], heading: v.heading.toFixed(2), speed: v.speed.toFixed(1), upright: v.upright.toFixed(2), y: v.body.position.y.toFixed(2), sleeping: v.body.sleepState } : null; },
       autopilot: (on: boolean) => { this.autopilot = on ? { points: [], i: 0, slow: 0, dir: this.heading(), back: 0 } : undefined; return on; },
       /** Put the car on the nearest big road (trunk/primary/secondary), facing along it. */

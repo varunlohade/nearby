@@ -269,6 +269,36 @@ export class WorldStream implements Sink {
     return out;
   }
 
+  /** First building wall on the segment a→b, as a fraction 0..1 of the way (1 = clear). Allocation-free. */
+  rayWall(ax: number, az: number, bx: number, bz: number) {
+    const dx = bx - ax, dz = bz - az, len = Math.hypot(dx, dz);
+    const stamp = ++this.stampId;
+    let best = 1;
+    // Cover the segment with 3x3 cell blocks every CELL metres (a wall is listed in every cell it crosses).
+    const steps = Math.max(1, Math.ceil(len / CELL));
+    for (let k = 0; k < steps; k++) {
+      const mx = ax + dx * (k + 0.5) / steps, mz = az + dz * (k + 0.5) / steps;
+      for (let ox = -1; ox <= 1; ox++) for (let oz = -1; oz <= 1; oz++) {
+        const qx = mx + ox * CELL, qz = mz + oz * CELL;
+        const c = this.chunks.get(chunkOf(qx, qz))?.built;
+        const cell = c?.grid.get(cellKey(qx, qz));
+        if (!c || !cell) continue;
+        const s = c.segments;
+        for (let n = 0; n < cell.length; n++) {
+          const i = cell[n];
+          if (c.stamp[i >> 2] === stamp) continue; c.stamp[i >> 2] = stamp;
+          const wx = s[i + 2] - s[i], wz = s[i + 3] - s[i + 1];
+          const den = dx * wz - dz * wx;
+          if (Math.abs(den) < 1e-9) continue;
+          const ex = s[i] - ax, ez = s[i + 1] - az;
+          const t = (ex * wz - ez * wx) / den, u = (ex * dz - ez * dx) / den;
+          if (t >= 0 && t < best && u >= 0 && u <= 1) best = t;
+        }
+      }
+    }
+    return best;
+  }
+
   /** Depth into water at (x, z): distance from the shore if inside a water area, else -1. */
   waterDepth(x: number, z: number) {
     for (const e of this.areas.values()) {

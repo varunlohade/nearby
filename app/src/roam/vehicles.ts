@@ -11,6 +11,9 @@
 //   - Bruno Simon's folio-2019 (MIT, src/javascript/World/Physics.js): custom
 //     sliding wheel rotation (-30), roll influence 0.01 against tipping in city
 //     crashes, and the wheel/ground contact friction 0.3.
+//   - Sketchbook by swift502 (MIT, github.com/swift502/Sketchbook,
+//     src/ts/vehicles/Car.ts physicsPreStep): drift correction, so that while
+//     you steer the front wheels turn at least as far as the car is sliding.
 // Changes: forward is -z to match our meshes, and the handbrake lowers rear grip
 // for a drift (a common arcade trick).
 
@@ -89,8 +92,17 @@ export class Vehicle {
     const braking = throttle < 0 && speed > 1;
     const k = Math.min(1, dt * 20);
     this.engine += ((braking ? 0 : throttle * CAR.force * (reversing ? 0.55 : 1)) - this.engine) * k;
+    // Analog stick: a small dead zone and a soft curve, so a thumb's wobble does not swerve the car (keys stay ±1).
+    const a = Math.abs(steer);
+    steer = a < 0.08 ? 0 : Math.sign(steer) * ((a - 0.08) / 0.92) ** 1.5;
     // Steering eases off at speed so the car stays controllable (speed-sensitive steering).
-    const steerTarget = -steer * CAR.steer / (1 + Math.abs(speed) * 0.065);
+    let steerTarget = -steer * CAR.steer / (1 + Math.abs(speed) * 0.065);
+    if (speed > 3 && steer !== 0) {
+      // Sketchbook drift correction: steering value that points the wheels along the slide.
+      const v = this.body.velocity, slip = Math.atan2(v.x, -v.z) - this.heading;
+      const along = -Math.atan2(Math.sin(slip), Math.cos(slip));
+      steerTarget = Math.max(-CAR.steer, Math.min(CAR.steer, steer > 0 ? Math.min(steerTarget, along) : Math.max(steerTarget, along)));
+    }
     this.steering += (steerTarget - this.steering) * k;
     const limit = Math.abs(speed) < CAR.maxSpeed;
     for (let i = 2; i < 4; i++) this.raycast.applyEngineForce(limit ? this.engine : 0, i);
