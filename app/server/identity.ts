@@ -11,14 +11,15 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { getStore } from './store.js';
 
 const COOKIE = 'nearby_me';
-let secret = '';
+const localSecret = randomBytes(32).toString('hex');
+let secret = localSecret;
 
 /** Set once at startup from the server's secrets. */
 export function configureIdentity(value: string) {
-  secret = value || 'nearby-local-development-only';
+  secret = value || localSecret;
 }
 
-const sign = (id: string) => createHmac('sha256', secret || 'nearby-local-development-only').update('nearby-me:' + id).digest('hex');
+const sign = (id: string) => createHmac('sha256', secret).update('nearby-me:' + id).digest('hex');
 
 export interface Visitor { id: string; name: string }
 

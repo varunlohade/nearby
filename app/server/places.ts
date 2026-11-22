@@ -12,8 +12,9 @@
 // through the server. Streams end before the function time limit and the browser
 // reconnects with the same peer id.
 
-import { randomBytes } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { createPrivate, privateRoom } from './private-rooms.js';
 import { allow, clientIp, getStore } from './store.js';
 
 type Next = (error?: unknown) => void;
@@ -36,7 +37,11 @@ async function load(): Promise<Created[]> {
   const all = await store.hgetall<Created>('places');
   const now = Date.now();
   const expired = Object.values(all).filter(c => c.expires < now - 3600000).map(c => c.id);
-  if (expired.length) void store.hdel('places', ...expired);
+  if (expired.length) {
+    const keys=expired.filter(id=>id.startsWith('p')).flatMap(id=>['owner','keys','requests','messages'].map(part=>'private:'+part+':'+id));
+    if(keys.length)await store.del(...keys);
+    await store.hdel('places', ...expired);
+  }
   return Object.values(all).filter(c => !expired.includes(c.id)).sort((a, b) => a.created - b.created);
 }
 
@@ -78,7 +83,8 @@ async function placeName(lat: number, lng: number) {
   } catch { return `${lat.toFixed(3)}, ${lng.toFixed(3)}`; }
 }
 
-export function placesApi() {
+export function placesApi(turnUrls='', turnSecret='') {
+  const urls=turnUrls.split(',').map(url=>url.trim()).filter(url=>/^turns?:[^\s]+$/.test(url));
   return async (req: IncomingMessage, res: ServerResponse, next: Next) => {
     const url = new URL(req.url ?? '/', 'http://local');
     if (!url.pathname.startsWith('/api/places') && !url.pathname.startsWith('/api/audio/')) return next();
@@ -87,6 +93,15 @@ export function placesApi() {
       res.end(JSON.stringify(data));
     };
     try {
+      if(url.pathname==='/api/audio/network' && req.method==='GET'){
+        if(!urls.length || !turnSecret)return send(200,{});
+        if(!await allow('relay:'+clientIp(req.headers,req.socket?.remoteAddress),60,60,false))return send(429,{error:'Try again shortly.'});
+        const username=(Math.floor(Date.now()/1000)+3600)+':'+randomBytes(8).toString('hex');
+        const credential=createHmac('sha1',turnSecret).update(username).digest('base64');
+        return send(200,{relay:{urls,username,credential}});
+      }
+      const privateMatch = /^\/api\/places\/(p[a-f0-9]{12})$/.exec(url.pathname);
+      if (privateMatch) return await privateRoom(privateMatch[1],req,res,req.method==='POST' ? await readJson(req,5000) : {});
       // Where is this point? Used by the create menu.
       if (url.pathname === '/api/places/where' && req.method === 'GET') {
         const lat = Number(url.searchParams.get('lat')), lng = Number(url.searchParams.get('lng'));
@@ -123,13 +138,15 @@ export function placesApi() {
           start = Number(body.start);
           if (!Number.isFinite(start) || start < now - 15 * 60000 || start > now + 366 * 86400000) return send(400, { error: 'Pick a start time in the next year.' });
         }
+        const locked = kind === 'room' && body.access === 'private';
         const item: Created = {
-          id: 'c' + randomBytes(6).toString('hex'), kind, title, lat, lng,
+          id: (locked ? 'p' : 'c') + randomBytes(6).toString('hex'), kind, title, lat, lng,
           place: clean(body.place, 80) || await placeName(lat, lng),
           start, category: kind === 'event' && CATEGORIES.includes(body.category) ? body.category : undefined,
-          by, created: now,
+          by:locked ? '' : by, created: now,
           expires: kind === 'event' ? start! + 6 * 3600000 : kind === 'audio' ? now + 24 * 3600000 : now + 7 * 86400000,
         };
+        if (locked) await createPrivate(item.id,body.wrapped,req,res);
         await getStore().hset('places', item.id, item);
         return send(201, { item });
       }

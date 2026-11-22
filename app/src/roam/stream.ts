@@ -10,6 +10,7 @@
 
 import * as THREE from 'three';
 import type maplibregl from 'maplibre-gl';
+import { streetscape } from './streetscape';
 import { buildAreas, buildBuildings, buildRoads } from './build';
 import { CHUNK, chunkOf, finishBuildings, readLayer, type Area, type Frame, type Landmark, type NamedLine, type RawBuilding, type Road, type Sink, type XZ } from './data';
 import { RoadGraph } from './graph';
@@ -21,6 +22,7 @@ const CELL = 16;
 interface Chunk {
   key: string; cx: number; cz: number;
   roads: Road[]; raw: RawBuilding[]; names: NamedLine[]; keys: string[];
+  dirty?: boolean;
   built?: {
     group: THREE.Group; segments: Float32Array; grid: Map<number, number[]>; stamp: Int32Array;
     minimap: HTMLCanvasElement; areas: Set<string>;
@@ -55,9 +57,9 @@ export class WorldStream implements Sink {
     if (chunk) this.chunk(chunk).keys.push(key);
     return true;
   }
-  road(chunk: string, road: Road) { this.chunk(chunk).roads.push(road); if (road.drivable) this.graphDirty = true; }
+  road(chunk: string, road: Road) { const c=this.chunk(chunk); c.roads.push(road); c.dirty=true; if (road.drivable) this.graphDirty = true; }
   name(chunk: string, line: NamedLine) { this.chunk(chunk).names.push(line); }
-  building(chunk: string, b: RawBuilding) { this.chunk(chunk).raw.push(b); }
+  building(chunk: string, b: RawBuilding) { const c=this.chunk(chunk); c.raw.push(b); c.dirty=true; }
   area(area: Area) { this.areas.set(area.key, { area, users: new Set() }); }
   landmark(l: Landmark) { this.landmarks.push(l); }
 
@@ -90,7 +92,8 @@ export class WorldStream implements Sink {
     const ahead = this.q.viewRadius;
     const [lng, lat] = this.frame.toLngLat(px + fx * ahead, pz + fz * ahead);
     this.map.jumpTo({ center: [lng, lat], zoom: 14.2 });
-    const done = () => { this.loading = false; this.dataRect = this.mapRect(); this.queue = [...LAYERS]; };
+    let settled=false;
+    const done = () => { if(settled)return;settled=true;this.loading = false; this.dataRect = this.mapRect(); this.queue = [...LAYERS]; };
     const timer = setTimeout(done, 9000);
     this.map.once('idle', () => { clearTimeout(timer); done(); });
   }
@@ -123,7 +126,7 @@ export class WorldStream implements Sink {
     const todo: { c: Chunk; p: number }[] = [];
     for (let dx = -span; dx <= span; dx++) for (let dz = -span; dz <= span; dz++) {
       const c = this.chunks.get((pcx + dx) + ',' + (pcz + dz));
-      if (!c || c.built) continue;
+      if (!c || (c.built && !c.dirty)) continue;
       const ox = (c.cx + 0.5) * CHUNK - px, oz = (c.cz + 0.5) * CHUNK - pz, d = Math.hypot(ox, oz);
       if (d > view + CHUNK * 0.7) continue;
       // Nearest first, and what is in front of you before what is behind.
@@ -147,6 +150,8 @@ export class WorldStream implements Sink {
   }
 
   private build(c: Chunk) {
+    if(c.built)this.unbuild(c);
+    c.dirty=false;
     const group = new THREE.Group();
     group.name = 'chunk ' + c.key;
     group.add(buildRoads(c.roads));
@@ -173,6 +178,7 @@ export class WorldStream implements Sink {
       areas.add(key); e.users.add(c.key);
       if (!e.mesh) { e.mesh = buildAreas([e.area]); this.scene.add(e.mesh); }
     }
+    group.add(streetscape(c.roads,buildings,[...areas].map(k=>this.areas.get(k)!.area),x0,z0,CHUNK));
     this.scene.add(group);
     c.built = { group, segments, grid, stamp: new Int32Array(segments.length / 4), minimap: this.minimapTile(c, areas), areas };
     this.stats.built++;
@@ -216,7 +222,7 @@ export class WorldStream implements Sink {
   private unbuild(c: Chunk) {
     const b = c.built!;
     this.scene.remove(b.group);
-    b.group.traverse(o => { const m = o as THREE.Mesh; m.geometry?.dispose(); const mat = m.material as THREE.Material | undefined; mat?.dispose?.(); });
+    b.group.traverse(o => { const m = o as THREE.Mesh; if(m instanceof THREE.InstancedMesh)m.dispose(); m.geometry?.dispose(); const mat = m.material as THREE.Material | undefined; mat?.dispose?.(); });
     for (const key of b.areas) { const e = this.areas.get(key); if (!e) continue; e.users.delete(c.key); if (!e.users.size) this.disposeArea(e); }
     c.built = undefined;
     this.stats.built--;
@@ -225,7 +231,7 @@ export class WorldStream implements Sink {
   private disposeArea(e: AreaEntry) {
     if (!e.mesh) return;
     this.scene.remove(e.mesh);
-    e.mesh.traverse(o => { const m = o as THREE.Mesh; m.geometry?.dispose(); (m.material as THREE.Material | undefined)?.dispose?.(); });
+    e.mesh.traverse(o => { const m = o as THREE.Mesh; if(m instanceof THREE.InstancedMesh)m.dispose(); m.geometry?.dispose(); (m.material as THREE.Material | undefined)?.dispose?.(); });
     e.mesh = undefined;
   }
 
@@ -269,6 +275,8 @@ export class WorldStream implements Sink {
       const a = e.area, b = a.box;
       if (a.kind !== 'water' || x < b[0] || x > b[2] || z < b[1] || z > b[3]) continue;
       if (!inside(a.outer, x, z) || a.holes.some(h => inside(h, x, z))) continue;
+      const hit=this.graph.nearest(x,z,12);
+      if(hit && this.graph.edges[hit.edge].bridge && hit.dist<=this.graph.edges[hit.edge].width/2) return -1;
       let d = Infinity;
       for (const ring of [a.outer, ...a.holes]) d = Math.min(d, edgeDistance(ring, x, z));
       return d;

@@ -19,7 +19,7 @@ const handlers: Handler[] = [
   nexconnApi({ appKey: env.NEXCONN_APP_KEY ?? '', secret: env.NEXCONN_APP_SECRET ?? '', host: env.NEXCONN_API_HOST || 'api.sg-light-api.com' }),
   lumaApi,
   askApi(env.ANTHROPIC_API_KEY ?? '', { id: env.REDDIT_CLIENT_ID, secret: env.REDDIT_CLIENT_SECRET }),
-  placesApi(),
+  placesApi(env.TURN_URLS, env.TURN_SHARED_SECRET),
   communitiesApi(),
   agentsApi(),
 ];

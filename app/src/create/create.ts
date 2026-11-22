@@ -7,6 +7,7 @@
 
 import maplibregl from 'maplibre-gl';
 import './create.css';
+import { newPrivateKey } from './private-room';
 import type { Place } from '../world/earth';
 import { AudioSession } from './audio';
 
@@ -50,6 +51,7 @@ export function mountCreate(options: CreateOptions) {
   let audioItem: Created | undefined;
   let fetchTimer = 0;
   let fetchSeq = 0;
+  let sharedRoom = new URLSearchParams(location.search).get('room');
 
   // ------------------------------------------------------------ "+ Create" mode
   const bar = document.createElement('div');
@@ -155,6 +157,7 @@ export function mountCreate(options: CreateOptions) {
     card.innerHTML = `
       <header><span class="create-kicker"><i>${KINDS[kind].icon}</i>${KINDS[kind].label}</span><button type="button" class="create-x" aria-label="Close">×</button></header>
       <label><span>Name</span><input name="title" required minlength="2" maxlength="60" value="${esc(suggestion)}" placeholder="${kind === 'event' ? 'Sunday football, book swap…' : 'Give it a name'}" /></label>
+      ${kind === 'room' ? '<label><span>Access</span><select name="access"><option value="public">Public · anyone can join</option><option value="private">Private · request to join</option></select></label>' : ''}
       ${kind === 'event' ? `
       <div class="create-row">
         <label><span>Starts</span><input name="start" type="datetime-local" required value="${nextHour()}" /></label>
@@ -176,12 +179,14 @@ export function mountCreate(options: CreateOptions) {
         const response = await fetch('/api/places', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            access:data.get('access'), wrapped:data.get('access')==='private' ? await newPrivateKey() : undefined,
             kind, title: String(data.get('title') ?? ''), lat: at.lat, lng: at.lng, place: where(), by: options.user().name,
             start: kind === 'event' ? new Date(String(data.get('start'))).valueOf() : undefined, category: data.get('category') ?? undefined,
           }),
         });
         const result = await response.json();
         if (!response.ok) throw new Error(result.error || 'Could not create it. Try again.');
+        ++fetchSeq;
         add(result.item);
         publishNearby();
         open(result.item.id, true);
@@ -208,7 +213,7 @@ export function mountCreate(options: CreateOptions) {
     const el = markers.get(item.id)?.getElement();
     if (!el) return;
     const badge = item.kind === 'audio' ? `<em>${item.live ? item.live + ' live' : 'Live'}</em>` : item.kind === 'event' && item.start ? `<em>${new Date(item.start).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</em>` : '';
-    el.innerHTML = `<span class="drop-face">${KINDS[item.kind].icon}</span>${badge}<span class="drop-name">${esc(item.title)}</span>`;
+    el.innerHTML = `<span class="drop-face">${KINDS[item.kind].icon}</span>${item.id.startsWith('p') ? '<em>Private</em>' : badge}<span class="drop-name">${esc(item.title)}</span>`;
     el.classList.toggle('is-live', item.kind === 'audio' && !!item.live);
   }
   function add(item: Created) {
@@ -227,13 +232,13 @@ export function mountCreate(options: CreateOptions) {
     card.className = 'create-card drop-card kind-' + item.kind;
     const distance = kmFrom(options.place(), item);
     const line = item.kind === 'event' && item.start ? when(item.start) + (item.category ? ' · ' + CATEGORY_LABEL[item.category] : '')
-      : item.kind === 'audio' ? (item.live ? `${item.live} talking now` : 'Nobody talking yet') : 'Open chat room';
+      : item.kind === 'audio' ? (item.live ? `${item.live} talking now` : 'Nobody talking yet') : item.id.startsWith('p') ? 'Private room · approval required' : 'Public chat room';
     card.innerHTML = `
       <header><span class="create-kicker"><i>${KINDS[item.kind].icon}</i>${KINDS[item.kind].label}</span><button type="button" class="create-x" aria-label="Close">×</button></header>
       <h3>${esc(item.title)}</h3>
       <p class="drop-line">${esc(line)}</p>
       <p class="create-where">⌖ ${esc(item.place)}${distance ? ` · ${distance.toFixed(1)} km away` : ''}</p>
-      <p class="drop-by">Started by ${esc(item.by)} · ${ago(item.created)}</p>
+      <p class="drop-by">${item.by ? 'Started by ' + esc(item.by) + ' · ' : ''}${ago(item.created)}</p>
       <div class="create-actions">
         ${item.kind === 'audio' ? `<button type="button" data-act="join">${audioItem?.id === item.id ? 'You are in' : 'Join audio'}</button>` : ''}
         <button type="button" data-act="chat" class="${item.kind === 'audio' ? 'quiet' : ''}">${item.kind === 'room' ? 'Open chat room' : item.kind === 'event' ? 'Event chat' : 'Text chat'}</button>
@@ -244,9 +249,9 @@ export function mountCreate(options: CreateOptions) {
     card.querySelector<HTMLButtonElement>('[data-act=chat]')!.onclick = () => { closePopup(); options.openChat(item.id, item.title, KINDS[item.kind].label); };
     card.querySelector<HTMLButtonElement>('[data-act=join]')?.addEventListener('click', () => { closePopup(); void joinAudio(item); });
     card.querySelector<HTMLButtonElement>('[data-act=share]')!.onclick = async () => {
-      const link = `${location.origin}/?at=${item.lat.toFixed(5)},${item.lng.toFixed(5)}`;
-      await navigator.clipboard?.writeText(`${item.title} · ${link}`).catch(() => undefined);
-      card.querySelector('.create-status')!.textContent = 'Link copied';
+      const link = `${location.origin}/?at=${item.lat.toFixed(5)},${item.lng.toFixed(5)}&room=${item.id}`;
+      try { await navigator.clipboard.writeText(link); card.querySelector('.create-status')!.textContent = 'Link copied'; }
+      catch { card.querySelector('.create-status')!.textContent = link; }
     };
     show(at, card, 'create-popup');
     if (fresh) {
@@ -267,7 +272,7 @@ export function mountCreate(options: CreateOptions) {
       if (s !== audio) return;
       renderAudio(s, note);
       const self = items.get(item.id);
-      if (self) { self.live = s.participants.size; paint(self); }
+      if (self) { self.live = s.speakerCount; paint(self); }
     });
     audio = session;
     try { await session.join(); }
@@ -319,28 +324,35 @@ export function mountCreate(options: CreateOptions) {
     const place = options.place();
     // Always include ~30 km around the area center, so the activity list stays complete.
     const pad = place ? { w: place.lng - 0.35, s: place.lat - 0.28, e: place.lng + 0.35, n: place.lat + 0.28 } : undefined;
-    const box = [Math.max(-180, Math.min(b.getWest(), pad?.w ?? 180)), Math.max(-85, Math.min(b.getSouth(), pad?.s ?? 90)),
-      Math.min(180, Math.max(b.getEast(), pad?.e ?? -180)), Math.min(85, Math.max(b.getNorth(), pad?.n ?? -90))];
+    const wrap=(v:number)=>((v+180)%360+360)%360-180;
+    const global=b.getEast()-b.getWest()>=360;
+    const boxes=[[global?-180:wrap(b.getWest()),Math.max(-85,b.getSouth()),global?180:wrap(b.getEast()),Math.min(85,b.getNorth())]];
+    if(pad)boxes.push([wrap(pad.w),pad.s,wrap(pad.e),pad.n]);
     try {
-      const response = await fetch('/api/places?bbox=' + box.map(v => v.toFixed(4)).join(','));
-      const { items: list } = await response.json() as { items: Created[] };
+      const pages=await Promise.all(boxes.map(async box=>{
+        const response=await fetch('/api/places?bbox='+box.map(v=>v.toFixed(4)).join(','));
+        if(!response.ok)throw Error();
+        return (await response.json()).items as Created[];
+      }));
+      const list=[...new Map(pages.flat().map(item=>[item.id,item])).values()];
       if (seq !== fetchSeq) return;
       const seen = new Set(list.map(i => i.id));
       for (const [id, marker] of markers) {
         const item = items.get(id)!;
-        const inside = item.lat >= box[1] && item.lat <= box[3] && item.lng >= box[0] && item.lng <= box[2];
+        const inside = boxes.some(([w,s,e,n])=>item.lat>=s && item.lat<=n && (w<=e ? item.lng>=w && item.lng<=e : item.lng>=w || item.lng<=e));
         if (inside && !seen.has(id) && audioItem?.id !== id) { marker.remove(); markers.delete(id); items.delete(id); }
       }
       list.forEach(item => {
-        if (audioItem?.id === item.id && audio) item.live = audio.participants.size;
+        if (audioItem?.id === item.id && audio) item.live = audio.speakerCount;
         add(item);
       });
       publishNearby();
+      if(sharedRoom && items.has(sharedRoom)){ const id=sharedRoom;sharedRoom=null;open(id); }
     } catch { /* keep what is on the map */ }
   }
   function scheduleFetch(delay = 300) { clearTimeout(fetchTimer); fetchTimer = window.setTimeout(fetchViewport, delay); }
   map.on('moveend', () => scheduleFetch());
-  window.setInterval(() => { if (!document.hidden) scheduleFetch(0); }, 20000);
+  window.setInterval(() => { if (!document.hidden) scheduleFetch(0); }, 5000);
   let lastPlace: Place | undefined;
   new MutationObserver(() => {
     const place = options.place();

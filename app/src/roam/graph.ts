@@ -4,7 +4,7 @@
 
 import type { Road, XZ } from './data';
 
-export interface Edge { a: number; b: number; len: number; width: number; cls: string }
+export interface Edge { a: number; b: number; len: number; width: number; cls: string; bridge?: boolean }
 
 /** Minimal binary heap keyed by priority (smallest first). */
 class Heap {
@@ -49,7 +49,7 @@ export class RoadGraph {
         const [ax, az] = this.nodes[a], [bx, bz] = this.nodes[b];
         const len = Math.hypot(bx - ax, bz - az);
         if (len < 0.5) continue;
-        const e = this.edges.push({ a, b, len, width: road.width, cls: road.cls }) - 1;
+        const e = this.edges.push({ a, b, len, width: road.width, cls: road.cls, bridge:road.bridge }) - 1;
         this.adj[a].push(e); this.adj[b].push(e);
       }
     }

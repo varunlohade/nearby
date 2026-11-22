@@ -1,5 +1,6 @@
 import { NCCallCode, NCCallEngine, NCCallMediaType, NCCallType } from '@nexconn/call';
 import './calls.css';
+import { peerCalls } from './peer-call';
 
 type Phase = 'choose' | 'ringing' | 'incoming' | 'connecting' | 'connected' | 'ended';
 export function setupCalls() {
@@ -35,15 +36,26 @@ export function setupCalls() {
     views.hidden = !video || phase !== 'connected';
     if (!dialog.open) dialog.showModal();
   }
-  function finish(message: string) {
+  const fallback=peerCalls(local,remote,{
+    invite(id,withVideo){
+      if(dialog.open && !['choose','ended'].includes(phase)) return false;
+      peer=id;video=withVideo;++generation;
+      title.textContent=video?'Incoming video call':'Incoming voice call';
+      draw('incoming',video?'Accept to share your camera and microphone.':'Accept to share your microphone.');return true;
+    },
+    connected(){micOn=cameraOn=true;draw('connected','Connected');},
+    ended(message){finish(message,false);}
+  });
+  function finish(message: string,native=true) {
     generation++;
-    if (video && peer) engine.removeVideoView([peer]);
+    if (native && video && peer) engine.removeVideoView([peer]);
     local.srcObject = remote.srcObject = null;
     callId = '';
     draw('ended',message);
   }
   async function end() {
     if (phase === 'ended' || phase === 'choose') { dialog.close(); return; }
+    if(fallback.active){fallback.end();return;}
     const seq = ++generation;
     try {
       const result = await engine.endCall(callId ? {callId} : {});
@@ -63,9 +75,9 @@ export function setupCalls() {
         if (result.callId) void engine.endCall({callId:result.callId});
         return;
       }
+      if(result.code===NCCallCode.VOIP_SERVICE_UNAVAILABLE){await fallback.start(peer,video);return;}
       if (result.code !== NCCallCode.SUCCESS || !result.callId) {
-        finish(result.code === NCCallCode.VOIP_SERVICE_UNAVAILABLE ? 'Calling is disabled for this Nexconn app.' :
-          'Could not start this call (Nexconn ' + result.code + ').');
+        finish('Could not start this call (Nexconn ' + result.code + ').');
         return;
       }
       callId = result.callId;
@@ -74,6 +86,7 @@ export function setupCalls() {
   async function accept() {
     const seq = generation;
     draw('connecting','Connecting…');
+    if(fallback.active){await fallback.accept();return;}
     try {
       const result = await engine.acceptCall({callId});
       if (result.code !== 0) throw new Error();
@@ -102,7 +115,7 @@ export function setupCalls() {
       }
     },
     onCallEnded({session}) {
-      if ((callId && callId !== session.getCallId()) || ['ended','choose'].includes(phase)) return;
+      if (fallback.active || (callId && callId !== session.getCallId()) || ['ended','choose'].includes(phase)) return;
       finish('Call ended.');
     },
   });
@@ -111,7 +124,7 @@ export function setupCalls() {
     button.disabled = true;
     const mic = button.dataset.action === 'mic';
     try {
-      const result = mic ? await engine.enableMicrophone(!micOn) : await engine.enableCamera(!cameraOn);
+      const result = fallback.active ? (fallback.enable(mic,mic ? !micOn : !cameraOn),{code:0}) : mic ? await engine.enableMicrophone(!micOn) : await engine.enableCamera(!cameraOn);
       if (seq !== generation || phase !== 'connected') return;
       if (result.code !== 0) throw new Error();
       if (mic) micOn = !micOn; else cameraOn = !cameraOn;

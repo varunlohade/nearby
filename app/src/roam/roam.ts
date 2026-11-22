@@ -174,13 +174,19 @@ class Roam {
       await this.loadFirstArea();
     } catch (error) {
       console.error('[roam]', error);
-      this.root.querySelector('.roam-loading p')!.textContent = 'Street data did not load. Try again in a moment.';
+      const notice=this.root.querySelector('.roam-loading p');
+      if(notice){
+        notice.textContent='No drivable streets loaded here.';
+        const back=document.createElement('button');back.textContent='Choose another spot on the map';back.onclick=this.exit;notice.after(back);
+      }
       return;
     }
+    if (this.disposed) return;
     this.setupScene();
     this.setupPhysics();
     await this.loadSpots();
     const asset = await this.humanAsset;
+    if (this.disposed) return;
     if (asset) {
       this.human = new Walker(asset);
       this.human.object.visible = false;
@@ -304,12 +310,13 @@ class Roam {
 
   private async loadFirstArea() {
     const map = this.options.map, place = this.options.place;
-    const center = place ? { lng: place.lng, lat: place.lat } : map.getCenter();
+    const center = map.getCenter().wrap();
     this.driveLeft = LEFT_HAND.test(place?.country ?? '');
     this.savedCamera = { center: map.getCenter(), zoom: map.getZoom(), bearing: map.getBearing(), pitch: map.getPitch() };
     this.progress(0.15);
     map.jumpTo({ center: [center.lng, center.lat], zoom: 14.2, bearing: 0, pitch: 0 });
     await Promise.race([new Promise(resolve => map.once('idle', resolve)), new Promise(resolve => setTimeout(resolve, 9000))]);
+    if (this.disposed) return;
     this.progress(0.55, 'Laying out the streets');
     this.frame = new Frame(center.lng, center.lat);
     this.stream = new WorldStream(map, this.frame, this.scene, this.q);
@@ -629,6 +636,10 @@ class Roam {
   private onKey = (e: KeyboardEvent) => {
     if (this.disposed || document.body.classList.contains('chat-open') || document.querySelector('dialog[open]') || (e.target as HTMLElement)?.closest?.('input, textarea, select')) return;
     const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    if (this.root.querySelector('.roam-loading')) {
+      if(k==='Escape' && e.type==='keydown'){e.preventDefault();e.stopPropagation();this.exit();}
+      return;
+    }
     const handled = ['w', 'a', 's', 'd', 'q', 'e', 'f', ' ', 'Shift', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'r', 'Escape', 'm', 'g', 'v', '1', '2', '3', 'c', 'h'].includes(k);
     if (!handled) return;
     e.preventDefault(); e.stopPropagation();
@@ -642,9 +653,9 @@ class Roam {
       if (!big.hidden) this.toggleBigMap(false); else if (!places.hidden) this.togglePlaces(false); else this.exit();
     } else if (k === 'r') { if (this.mode === 'car') { this.resetCar(); this.toast('Back on the road'); } }
     else if (k === 'f' || (k === 'e' && this.mode !== 'drone')) {
-      if (this.mode === 'car' || this.nearCar) this.useCar(); else if (this.mode === 'walk' && k === 'f') this.human?.wave();
+      if (this.mode === 'car' || this.nearCar) this.useCar(); else if (this.mode === 'walk' && k === 'f') this.wave();
     }
-    else if (k === 'h') { if (this.mode === 'walk') this.human?.wave(); }
+    else if (k === 'h') { if (this.mode === 'walk') this.wave(); }
     else if (k === 'm') this.toggleBigMap();
     else if (k === 'g') this.togglePlaces();
     else if (k === '1') this.setMode('car');
@@ -652,6 +663,13 @@ class Roam {
     else if (k === '3') this.setMode('drone');
     else if (k === 'v' || k === 'c') this.setMode(this.mode === 'car' ? 'walk' : this.mode === 'walk' ? 'drone' : 'car');
   };
+
+  private wave() {
+    if(!this.human || this.human.speed>=0.6)return;
+    this.human.wave();
+    const [x,z]=this.position();
+    this.crowd?.greet(x,z);
+  }
 
   private input() {
     const k = this.keys;
@@ -688,7 +706,7 @@ class Roam {
         e.preventDefault();
         if (name === 'reset') { if (this.mode === 'car') this.resetCar(); else this.jumpTo({ name: 'the road', ...this.nearestRoadXZ() }); }
         else if (name === 'run') { this.running = !this.running; b.setAttribute('aria-pressed', String(this.running)); }
-        else if (name === 'wave') this.human?.wave();
+        else if (name === 'wave') this.wave();
         else this.touchButtons.add(name);
       });
       for (const t of ['pointerup', 'pointerleave', 'pointercancel']) b.addEventListener(t, () => this.touchButtons.delete(name));
@@ -1530,6 +1548,7 @@ class Roam {
         return { cls: e.cls, distance: Math.round(bd) };
       },
       quality: () => ({ ...this.q }),
+      pedestrians: () => this.crowd?.snapshot() ?? [],
       /** Three stopped traffic cars in a line ahead of the player's car. */
       lineUp: () => {
         const v = this.driving; if (!v) return false;

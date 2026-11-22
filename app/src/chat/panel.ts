@@ -58,7 +58,7 @@ export function chatPanel(onState: (data: Record<string,string>) => void, onAvai
     if (!mine && service?.offerCall) {
       const call = document.createElement('button');
       call.type = 'button'; call.className = 'call-author';
-      call.textContent = m.name;
+      call.textContent = m.name + ' · Call';
       call.title = call.ariaLabel = 'Voice or video call with ' + m.name;
       call.onclick = () => service?.offerCall?.(m.userId,m.name);
       author.append(call);

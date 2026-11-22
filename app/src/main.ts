@@ -1,3 +1,4 @@
+import { openPrivateRoom } from './create/private-room';
 import './styles.css';
 import './atlas-hud.css';
 import './free-roam.css';
@@ -203,6 +204,12 @@ function closeEvent(restoreFocus = false) {
   opener = null;
 }
 
+function openMapConversation(id:string,title:string,kind:string) {
+  closeEvent();
+  if (/^p[a-f0-9]{12}$/.test(id)) { openPrivateRoom(id,title,chat.user.name); return; }
+  void chat.openRoom(id,title,kind); setChatOpen(true);
+}
+
 function setChatOpen(open: boolean) {
   if (open && document.body.classList.contains('roam-open')) document.body.append(chatPanel);
   else if (chatPanel.parentElement === document.body) $('#app').append(chatPanel);
@@ -357,12 +364,17 @@ async function start() {
   // Create a chat room, event or audio session anywhere on the map.
   create = mountCreate({
     map: () => atlas['map'], place: () => place, user: () => chat.user,
-    openChat: (id, title, kind) => { closeEvent(); void chat.openRoom(id, title, kind); setChatOpen(true); },
-    onNearby: items => { if (!place) return; createdNear = items.map(createdActivity); refreshListings(); },
+    openChat: openMapConversation,
+    onNearby: items => {
+      if (!place) return;
+      const next=items.map(createdActivity);
+      if(JSON.stringify(next)===JSON.stringify(createdNear))return;
+      createdNear=next;refreshListings();
+    },
   });
   mountCommunities({
     map: () => atlas['map'], place: () => place, user: () => chat.user,
-    openChat: (id, title, kind) => { closeEvent(); void chat.openRoom(id, title, kind); setChatOpen(true); },
+    openChat: openMapConversation,
   });
   const landing = mountLanding();
   world = new EarthExperience(canvas);
@@ -428,7 +440,7 @@ $('#enter-roam').onclick = () => {
   // Loaded on demand so Free Roam (three.js scene code, physics, character) does not grow the first load.
   void import('./roam/roam').then(({ openRoam }) =>
     openRoam({ map: atlas['map'], place, activities, user: chat.user,
-      openChat: (id,title,kind) => { void chat.openRoom(id,title,kind); setChatOpen(true); },
+      openChat: openMapConversation,
       onExit: () => { setChatOpen(false); void chat.openArea(); $('#enter-roam').focus({preventScroll: true}); } }));
 };
 $('#leave-roam').onclick = () => {

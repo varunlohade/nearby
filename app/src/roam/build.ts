@@ -7,7 +7,7 @@ import type { Area, Building, Road, XZ } from './data';
 
 export const COLORS = {
   sky: 0x14171b, ground: 0x24272a, park: 0x2f4437, water: 0x1f3d4a, accent: 0xf5bd52,
-  road: { motorway: 0xe8dcc1, trunk: 0xd4d1c4, primary: 0xd4d1c4, secondary: 0xa8a8a0, tertiary: 0x959793, minor: 0x5f6362, service: 0x4e5252, track: 0x454a47, path: 0x3f4542, raceway: 0xd4d1c4, busway: 0x6b6f6c } as Record<string, number>,
+  road: { motorway: 0x485052, trunk: 0x4f5556, primary: 0x505659, secondary: 0x53585b, tertiary: 0x545959, minor: 0x585d5e, service: 0x4e5252, track: 0x454a47, path: 0x3f4542, raceway: 0xd4d1c4, busway: 0x6b6f6c } as Record<string, number>,
 };
 const ROAD_Y: Record<string, number> = { motorway: 0.09, trunk: 0.085, primary: 0.08, secondary: 0.075, tertiary: 0.07, minor: 0.06, service: 0.05, raceway: 0.08, busway: 0.055, track: 0.04, path: 0.035 };
 
@@ -66,6 +66,16 @@ export function buildRoads(roads: Road[]) {
     const color = COLORS.road[road.cls] ?? COLORS.road.minor;
     const out = byColor.get(color) ?? byColor.set(color, { pos: [], idx: [] }).get(color)!;
     const y = ROAD_Y[road.cls] ?? 0.05, half = road.width / 2, pts = road.pts;
+    const curbColor=0x8d8b7e;
+    const curb=byColor.get(curbColor) ?? byColor.set(curbColor,{pos:[],idx:[]}).get(curbColor)!;
+    if(road.drivable && road.width>=7) for(let i=1;i<pts.length;i++){
+      const [ax,az]=pts[i-1],[bx,bz]=pts[i],len=Math.hypot(bx-ax,bz-az)||1;
+      const nx=(az-bz)/len,nz=(bx-ax)/len;
+      for(const sign of [-1,1]){
+        const a=sign*(half-.12),b=sign*(half+1.6);
+        quad(curb,[[ax+nx*a,.039,az+nz*a],[bx+nx*a,.039,bz+nz*a],[bx+nx*b,.039,bz+nz*b],[ax+nx*b,.039,az+nz*b]]);
+      }
+    }
     const base = out.pos.length / 3;
     for (let i = 0; i < pts.length; i++) {
       const prev = pts[Math.max(0, i - 1)], next = pts[Math.min(pts.length - 1, i + 1)];
@@ -89,7 +99,7 @@ export function buildRoads(roads: Road[]) {
       for (let s = 0; s <= 10; s++) { const a = (s / 10) * Math.PI * 2; out.pos.push(end[0] + Math.cos(a) * half, y, end[1] + Math.sin(a) * half); }
       for (let s = 0; s < 10; s++) out.idx.push(c, c + 1 + s + 1, c + 1 + s);
     }
-    if (road.width >= 10 && road.drivable) {
+    if (road.width >= 7 && road.drivable) {
       let carry = 0;
       for (let i = 1; i < pts.length; i++) {
         const [ax, az] = pts[i - 1], [bx, bz] = pts[i];

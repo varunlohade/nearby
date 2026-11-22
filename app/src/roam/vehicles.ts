@@ -20,7 +20,7 @@ import type * as THREE from 'three';
 export const CAR = {
   mass: 500, half: new CANNON.Vec3(1, 0.55, 2.35),
   width: 1.7, height: -0.3, front: -1.35, back: 1.3,   // front at -z
-  steer: 0.3, force: 1800, maxBrake: 65, maxSpeed: 30,  // m/s (~108 km/h) for city streets
+  steer: 0.52, force: 1500, maxBrake: 65, maxSpeed: 22,  // m/s (~79 km/h) for city streets
   wheel: {
     radius: 0.38, suspensionStiffness: 30, suspensionRestLength: 0.35, frictionSlip: 1.5, sideAcceleration: 3,
     dampingRelaxation: 2.3, dampingCompression: 4.4, maxSuspensionForce: 100000, rollInfluence: 0.01,
@@ -90,7 +90,7 @@ export class Vehicle {
     const k = Math.min(1, dt * 20);
     this.engine += ((braking ? 0 : throttle * CAR.force * (reversing ? 0.55 : 1)) - this.engine) * k;
     // Steering eases off at speed so the car stays controllable (speed-sensitive steering).
-    const steerTarget = -steer * CAR.steer / (1 + Math.abs(speed) * 0.035);
+    const steerTarget = -steer * CAR.steer / (1 + Math.abs(speed) * 0.065);
     this.steering += (steerTarget - this.steering) * k;
     const limit = Math.abs(speed) < CAR.maxSpeed;
     for (let i = 2; i < 4; i++) this.raycast.applyEngineForce(limit ? this.engine : 0, i);

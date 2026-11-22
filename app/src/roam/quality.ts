@@ -14,9 +14,9 @@ export interface Quality {
 
 // The fog ends inside the view radius so chunk edges are never seen.
 const PRESETS: Record<Tier, Omit<Quality, 'tier' | 'reason'>> = {
-  high: { dprCap: 1.5, viewRadius: 640, buildBudgetMs: 4, chunkBuildings: 900, physicsRadius: 150, traffic: 24, pedestrians: 12, parked: 8, props: true,
+  high: { dprCap: 1.5, viewRadius: 640, buildBudgetMs: 4, chunkBuildings: 900, physicsRadius: 150, traffic: 24, pedestrians: 18, parked: 8, props: true,
     fogFar: 560, windows: true, antialias: true, labelsFar: 520, minimapEvery: 1 },
-  medium: { dprCap: 1.25, viewRadius: 480, buildBudgetMs: 3, chunkBuildings: 600, physicsRadius: 120, traffic: 14, pedestrians: 8, parked: 5, props: true,
+  medium: { dprCap: 1.25, viewRadius: 480, buildBudgetMs: 3, chunkBuildings: 600, physicsRadius: 120, traffic: 14, pedestrians: 12, parked: 5, props: true,
     fogFar: 430, windows: true, antialias: false, labelsFar: 420, minimapEvery: 2 },
   low: { dprCap: 1.0, viewRadius: 340, buildBudgetMs: 2, chunkBuildings: 350, physicsRadius: 100, traffic: 8, pedestrians: 6, parked: 3, props: false,
     fogFar: 310, windows: false, antialias: false, labelsFar: 300, minimapEvery: 3 },

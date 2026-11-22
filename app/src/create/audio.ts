@@ -3,14 +3,17 @@
 // The handshake stream ends before the server's time limit with a "reconnect"
 // event; the session then reopens it with the same peer id, keeping its calls.
 
+import { callNetwork } from './ice';
+
 export interface Participant { peer: string; name: string; state: string; level: number; me?: boolean; muted?: boolean; role?: 'speaker' | 'listener' }
 
-const ICE: RTCConfiguration = { iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }] };
+
 
 export class AudioSession {
   readonly peerId = crypto.randomUUID();
   participants = new Map<string, Participant>();
   muted = false;
+  private network: RTCConfiguration = {};
   private local?: MediaStream;
   private peers = new Map<string, RTCPeerConnection>();
   private pending = new Map<string, RTCIceCandidateInit[]>();
@@ -32,7 +35,18 @@ export class AudioSession {
     for (const player of this.players.values()) player.volume = this.volume;
   }
 
+  get speakerCount() {
+    return [...this.participants.values()].filter(p=>p.role !== 'listener').length;
+  }
+
   async join() {
+    try { await this.start(); }
+    catch (error) { this.leave(); throw error; }
+  }
+
+  private async start() {
+    this.network=await callNetwork();
+    if(this.abort.signal.aborted)throw Error('Session closed.');
     const listening = this.mode === 'listen';
     if (!listening) {
       try {
@@ -41,11 +55,13 @@ export class AudioSession {
         throw new Error('Microphone access is needed to join. Allow it in your browser and try again.');
       }
     }
+    if(this.abort.signal.aborted){this.local?.getTracks().forEach(t=>t.stop());throw Error('Session closed.');}
     this.context = new AudioContext();
     this.participants.set(this.peerId, { peer: this.peerId, name: this.name + (listening ? ' (listening, you)' : ' (you)'),
       state: 'connected', level: 0, me: true, role: listening ? 'listener' : 'speaker' });
     if (this.local) this.meter(this.peerId, this.local);
     await this.open();
+    if(this.abort.signal.aborted)throw Error('Session closed.');
     this.timer = window.setInterval(() => this.levels(), 120);
     this.onChange(this);
     addEventListener('pagehide', this.goodbye);
@@ -122,7 +138,7 @@ export class AudioSession {
   private connection(peer: string) {
     let pc = this.peers.get(peer);
     if (pc) return pc;
-    pc = new RTCPeerConnection(ICE);
+    pc = new RTCPeerConnection(this.network);
     this.peers.set(peer, pc);
     this.local?.getTracks().forEach(track => pc!.addTrack(track, this.local!));
     pc.onicecandidate = ({ candidate }) => { if (candidate) void this.send(peer, { ice: candidate.toJSON() }); };
@@ -220,6 +236,7 @@ export class AudioSession {
     for (const peer of [...this.peers.keys()]) this.drop(peer);
     this.local?.getTracks().forEach(track => track.stop());
     void this.context?.close().catch(() => undefined);
+    this.context=undefined;this.local=undefined;
     this.participants.clear();
   }
 }

@@ -32,7 +32,7 @@ export interface Landmark { name: string; x: number; z: number; kind: string }
 export const chunkOf = (x: number, z: number) => Math.floor(x / CHUNK) + ',' + Math.floor(z / CHUNK);
 
 const WIDTH: Record<string, number> = {
-  motorway: 15, trunk: 13, primary: 12, secondary: 10.5, tertiary: 9, minor: 7, service: 4.8,
+  motorway: 15, trunk: 13, primary: 12, secondary: 10.5, tertiary: 10, minor: 8, service: 5.8,
   track: 3.2, path: 2.2, raceway: 10, busway: 7,
 };
 const DRIVABLE = new Set(['motorway', 'trunk', 'primary', 'secondary', 'tertiary', 'minor', 'service', 'raceway', 'busway']);

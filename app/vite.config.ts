@@ -15,7 +15,7 @@ export default defineConfig(({ mode }) => {
   const host = env.NEXCONN_API_HOST || 'api.sg-light-api.com';
   const api = nexconnApi({ appKey, secret, host });
   const ask = askApi(env.ANTHROPIC_API_KEY ?? '', { id: env.REDDIT_CLIENT_ID, secret: env.REDDIT_CLIENT_SECRET });
-  const places = placesApi();
+  const places = placesApi(env.TURN_URLS, env.TURN_SHARED_SECRET);
   configureIdentity(env.IDENTITY_SECRET || secret);
   configureGuard(env.ANTHROPIC_API_KEY ?? '');
   const communities = communitiesApi();

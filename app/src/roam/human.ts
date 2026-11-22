@@ -255,7 +255,7 @@ interface Ped {
   gather?: { x: number; z: number; next: number };
   /** Running off (a driver who just lost their car, or someone dodging a car). */
   flee?: { t: number; dx: number; dz: number; delay: number };
-  visible: boolean; frame: number;
+  visible: boolean; frame: number; greetUntil?: number;
 }
 
 export interface CrowdSpot { x: number; z: number; kind: string }
@@ -292,6 +292,16 @@ export class Crowd {
     p.body.stumble();
   }
 
+  /** A nearby pedestrian acknowledges a wave before continuing along the sidewalk. */
+  greet(x:number,z:number) {
+    const person=this.peds.filter(p=>p.visible && !p.flee && !p.greetUntil)
+      .sort((a,b)=>Math.hypot(a.x-x,a.z-z)-Math.hypot(b.x-x,b.z-z))[0];
+    if(!person || Math.hypot(person.x-x,person.z-z)>12)return;
+    person.h=Math.atan2(x-person.x,-(z-person.z));
+    person.greetUntil=2.4;
+    person.body.gestureOnce(person.body.wave);
+  }
+
   /** People near a fast car hop out of the way (stumble and dodge, no injuries). */
   dodge(x: number, z: number, speed: number) {
     if (speed < 3) return;
@@ -308,6 +318,10 @@ export class Crowd {
   /** Put people on sidewalks around (px, pz), and a few around places that matter. */
   populate(px: number, pz: number, spots: CrowdSpot[], all = false) {
     const venues = spots.filter(s => ['audio', 'event', 'room', 'community', 'activity'].includes(s.kind) && Math.hypot(s.x - px, s.z - pz) < this.cull * 1.5);
+    const local = this.graph.edges.map((e,i)=>({e,i})).filter(({e})=>{
+      const [x,z]=this.graph.nodes[e.a];
+      return e.cls!=='motorway' && e.cls!=='trunk' && Math.hypot(x-px,z-pz)<this.cull*.9;
+    });
     let v = 0;
     this.peds.forEach((p, i) => {
       if (p.flee || (!all && Math.hypot(p.x - px, p.z - pz) < this.cull * 1.6)) return;
@@ -321,7 +335,8 @@ export class Crowd {
       }
       p.gather = undefined;
       for (let tries = 0; tries < 30; tries++) {
-        const ei = Math.floor(Math.random() * this.graph.edges.length), e = this.graph.edges[ei];
+        if (!local.length) break;
+        const {i:ei,e} = local[Math.floor(Math.random()*local.length)];
         const [ax, az] = this.graph.nodes[e.a];
         const d = Math.hypot(ax - px, az - pz);
         if (d > this.cull * (all ? 0.9 : 1.3) || (!all && d < 40) || e.cls === 'motorway' || e.cls === 'trunk') continue;
@@ -346,22 +361,35 @@ export class Crowd {
     for (const p of this.peds) {
       const d = Math.hypot(p.x - camX, p.z - camZ);
       p.visible = d < this.cull;
+      let walkSpeed=p.speed;
       p.body.root.visible = p.visible;
       if (p.flee) {
         const f = p.flee;
         f.t -= dt; f.delay -= dt;
         if (f.delay <= 0) { p.x += f.dx * 5 * dt; p.z += f.dz * 5 * dt; p.h = Math.atan2(f.dx, -f.dz); }
         if (f.t <= 0) { p.flee = undefined; p.x = p.z = 1e6; }
+      } else if (p.greetUntil) {
+        p.greetUntil=p.greetUntil>dt?p.greetUntil-dt:undefined;
       } else if (p.gather) {
         p.gather.next -= dt;
         if (p.gather.next <= 0 && p.visible) { p.body.gestureOnce(Math.random() < 0.5 ? p.body.wave : p.body.interact); p.gather.next = 5 + Math.random() * 8; }
       } else {
-        p.t += p.speed * dt;
+        if(p.visible){
+          const fx=Math.sin(p.h),fz=-Math.cos(p.h);
+          // Leave a step between walkers heading the same way on a narrow sidewalk.
+          if(this.peds.some(other=>{
+            if(other===p || !other.visible || other.flee || Math.cos(p.h-other.h)<0.7)return false;
+            const dx=other.x-p.x,dz=other.z-p.z,forward=dx*fx+dz*fz;
+            return forward>0 && forward<1.4 && Math.abs(dx*fz-dz*fx)<0.7;
+          }))walkSpeed*=0.4;
+        }
+        p.t += walkSpeed * dt;
         let e = this.graph.edges[p.edge], guard = 0;
+        if (!e || !this.graph.nodes[p.from] || (p.from!==e.a && p.from!==e.b)) { p.x=p.z=1e6;continue; }
         while (p.t > e.len && guard++ < 6) {
           p.t -= e.len;
           const node = this.graph.other(e, p.from);
-          const next = this.graph.adj[node].filter(i => i !== p.edge);
+          const next = this.graph.adj[node].filter(i => i !== p.edge && !['motorway','trunk'].includes(this.graph.edges[i].cls));
           p.edge = next.length ? next[Math.floor(Math.random() * next.length)] : p.edge;
           p.from = node;
           e = this.graph.edges[p.edge];
@@ -374,8 +402,12 @@ export class Crowd {
       p.body.root.rotation.y = -p.shown;
       // Animation level of detail: far people update every other frame.
       const every = d < 50 ? 1 : 2;
-      if ((this.frame + p.frame) % every === 0) p.body.blend(p.flee ? (p.flee.delay > 0 ? 0 : 5) : p.gather ? 0 : p.speed, dt * every);
+      if ((this.frame + p.frame) % every === 0) p.body.blend(p.flee ? (p.flee.delay > 0 ? 0 : 5) : p.gather || p.greetUntil ? 0 : walkSpeed, dt * every);
     }
+  }
+
+  snapshot() {
+    return this.peds.map((p,id)=>({id,x:p.x,z:p.z,visible:p.visible,greeting:!!p.greetUntil,gathering:!!p.gather}));
   }
 
   get visibleCount() { return this.peds.filter(p => p.visible).length; }
