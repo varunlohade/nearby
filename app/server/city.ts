@@ -119,14 +119,8 @@ function view(e: Entry, me: Visitor, now: number) {
     holdToken:participant ? holdToken(e) : undefined,price:e.price,description:e.description,position,until:e.until,closed:e.closed,
     count:e.queue.length,holder:(common.mine || position===0) ? e.queue[0]?.name : undefined,messages:participant ? publicMessages(e.messages) : []};
 }
-function updateOrdinaryItem(item: Item, input: Input, me: Visitor) {
+function updateInquiry(item: Item, input: Input, me: Visitor) {
   const owner = me.id === item.owner.id;
-  if (owner && (input.action === 'sold' || input.action === 'close')) {
-    item.closed = true;
-    item.sold = input.action === 'sold';
-    return;
-  }
-  if (input.action !== 'inquire') throw new Problem('That action is unavailable.',409);
   const threads = item.inquiries ??= {};
   let thread: Inquiry;
   if (owner) {
@@ -162,7 +156,13 @@ function update(e: Entry,b: Input,me: Visitor,now: number) {
     }
     if (e.hidden) throw new Problem('This listing was hidden after reports.',409);
     if (e.closed) throw new Problem('This listing is closed.',409);
-    if (e.dibs === false) return updateOrdinaryItem(e,b,me);
+    if (b.action === 'inquire') return updateInquiry(e,b,me);
+    if (e.dibs === false) {
+      if (!owner || (b.action !== 'sold' && b.action !== 'close')) throw new Problem('That action is unavailable.',409);
+      e.closed = true;
+      e.sold = b.action === 'sold';
+      return;
+    }
     if (e.queue.length && e.holdRevision === undefined) e.holdRevision = e.revision;
     const pos=e.queue.findIndex(p=>p.id===me.id);
     if (b.action==='claim' && !owner) {

@@ -36,6 +36,7 @@ test('city market and sports flows over HTTP', async t => {
     if (cookie) cookies[actor] = cookie.split(';')[0];
     const data = await response.json();
     assert.equal(response.status, status, JSON.stringify(data));
+    if (board === 'market' && data.entries) data.entries = data.entries.filter((entry: {sample?: boolean}) => !entry.sample);
     return data;
   }
   await Promise.all(Array.from({length: 9}, (_, i) => call(i, 'market')));
@@ -73,7 +74,12 @@ test('city market and sports flows over HTTP', async t => {
   const created = await Promise.all([call(0,'market',base), call(0,'market',base)]);
   assert.deepEqual(created[0], created[1]);
   assert.equal(created[0].dibs,true);
-  await market(1,'inquire',{message:'hello'},409);
+  const inquiry = await market(1,'inquire',{message:'Is pickup possible this evening?'});
+  assert.equal(inquiry.position,-1);
+  const ownerReply = await market(0,'inquire',{buyer:inquiry.inquiries[0].buyer,message:'Yes, after six.'});
+  assert.equal(ownerReply.count,0);
+  assert.deepEqual((await call(1,'market')).entries[0].inquiries,ownerReply.inquiries);
+  assert.deepEqual((await call(2,'market')).entries[0].inquiries,[]);
   await call(1,'market',base,409);
   assert.deepEqual((await call(0,'market',undefined,200,city+'-elsewhere')).entries, []);
   const claims = await Promise.all([1,2,3].map(actor => market(actor,'claim',guard(created[0]))));

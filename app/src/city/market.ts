@@ -65,7 +65,7 @@ function renderInquiries(card: HTMLElement, item: Listing) {
       container.append(detail);
     }
     existing.delete(key);
-    const label = item.mine ? `Chat with ${thread.name}` : thread.messages.length ? 'Your chat with the seller' : 'Contact seller';
+    const label = item.mine ? `Chat with ${thread.name}` : thread.messages.length ? 'Your chat with the seller' : 'Chat with seller';
     detail.querySelector('summary span')!.textContent = label;
     detail.querySelector('form')!.hidden = item.closed;
     renderMessages(detail.querySelector('ul')!, thread.messages);
@@ -127,7 +127,7 @@ function renderCard(card: HTMLElement, item: Listing) {
     terms.textContent = `${held} ends at ${until}. ${queue}`.trim();
   }
   const chat = card.querySelector<HTMLElement>('.mk-private')!;
-  if (ordinary) renderInquiries(card, item);
+  renderInquiries(card, item);
   const canChat = !ordinary && item.count > 0 && (item.mine || item.position === 0);
   const token = canChat ? item.holdToken || String(item.until) : '';
   const form = chat.querySelector<HTMLFormElement>('form')!;
@@ -308,11 +308,12 @@ export function mountMarket(getPlace: () => Place | undefined) {
     const input = form.elements.namedItem('message') as HTMLInputElement;
     const message = input.value.trim();
     if (!message) { input.focus(); return; }
-    const action = item.dibs === false ? 'inquire' : 'message';
+    const action = form.closest('.mk-inquiries') ? 'inquire' : 'message';
     const buyer = action === 'inquire' && item.mine ? form.closest<HTMLElement>('details')?.dataset.key : undefined;
+    const hold = action === 'message' ? item.holdToken : undefined;
     const pending = pendingMessages.get(form);
-    const requestId = pending?.text === message && pending.hold === item.holdToken ? pending.requestId : crypto.randomUUID();
-    pendingMessages.set(form, {text: message, hold: item.holdToken, requestId});
+    const requestId = pending?.text === message && pending.hold === hold ? pending.requestId : crypto.randomUUID();
+    pendingMessages.set(form, {text: message, hold, requestId});
     void write({
       action, id: item.id, revision: item.revision, until: item.until, holdToken: item.holdToken,
       buyer, message, requestId,
