@@ -204,6 +204,8 @@ function closeEvent(restoreFocus = false) {
 }
 
 function setChatOpen(open: boolean) {
+  if (open && document.body.classList.contains('roam-open')) document.body.append(chatPanel);
+  else if (chatPanel.parentElement === document.body) $('#app').append(chatPanel);
   chatPanel.classList.toggle('collapsed', !open);
   document.body.classList.toggle('chat-open', open);
   if (open) { closeEvent(); messageInput.focus({ preventScroll: true }); }
@@ -409,7 +411,7 @@ $('#rsvp').onclick = async () => {
 $('#chat-close').onclick = () => { setChatOpen(false); void chat.openArea(); };
 mobileChat.onclick = () => { void chat.openArea(); setChatOpen(true); };
 addEventListener('keydown', (event) => {
-  if (event.key !== 'Escape' || locationDialog.open || hostDialog.open || $<HTMLDialogElement>('#name-dialog').open) return;
+  if (event.key !== 'Escape' || document.querySelector('.nearby-call[open]') || locationDialog.open || hostDialog.open || $<HTMLDialogElement>('#name-dialog').open) return;
   if (!eventSheet.classList.contains('hidden')) closeEvent(true);
   else if (!chatPanel.classList.contains('collapsed')) { setChatOpen(false); void chat.openArea(); }
 });
@@ -425,7 +427,9 @@ $('#enter-roam').onclick = () => {
   // Free Roam: drive, walk or fly through this area (src/roam).
   // Loaded on demand so Free Roam (three.js scene code, physics, character) does not grow the first load.
   void import('./roam/roam').then(({ openRoam }) =>
-    openRoam({ map: atlas['map'], place, activities, user: chat.user, onExit: () => $('#enter-roam').focus({preventScroll: true}) }));
+    openRoam({ map: atlas['map'], place, activities, user: chat.user,
+      openChat: (id,title,kind) => { void chat.openRoom(id,title,kind); setChatOpen(true); },
+      onExit: () => { setChatOpen(false); void chat.openArea(); $('#enter-roam').focus({preventScroll: true}); } }));
 };
 $('#leave-roam').onclick = () => {
   setRoam(false);

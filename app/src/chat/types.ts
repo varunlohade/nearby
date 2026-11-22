@@ -30,6 +30,7 @@ export interface ChatService {
   join(room: ChatRoom, events: RoomEvents): Promise<void>;
   leave(): Promise<void>;
   send(roomId: string, text: string, image?: File): Promise<ChatMessage>;
+  offerCall?(id: string, name: string): void;
   earlier?(roomId: string, before: number): Promise<{messages: ChatMessage[]; more: boolean}>;
   write(roomId: string, key: string, value: string | null): Promise<void>;
 }

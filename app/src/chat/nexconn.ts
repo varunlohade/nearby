@@ -2,6 +2,8 @@ import {
   AreaCode, ChannelType, ConnectionStatus, ConnectionStatusHandler, Helper, MessageHandler, MessageType,
   NCEngine, OpenChannel, OpenChannelHandler, OpenChannelMetadataOperationType, SendTextMessageParams,
 } from '@nexconn/chat';
+import { NCCallEngine } from '@nexconn/call';
+import { setupCalls } from './calls';
 import type { Message } from '@nexconn/chat';
 import type { ChatIdentity, ChatMessage, ChatService, RoomEvents } from './types';
 
@@ -20,7 +22,9 @@ function decode(m: Message): ChatMessage | undefined {
 }
 
 export function createNexconnChat(appKey: string, region: keyof typeof AreaCode): ChatService {
+  NCCallEngine.install();
   NCEngine.initialize({appKey, areaCode:AreaCode[region]});
+  let offerCall: ReturnType<typeof setupCalls> | undefined;
   let me: ChatIdentity;
   let channel: OpenChannel | null = null;
   let events: RoomEvents | null = null;
@@ -78,7 +82,7 @@ export function createNexconnChat(appKey: string, region: keyof typeof AreaCode)
     return channel;
   }
   return {
-    mode:'nexconn',
+    mode:'nexconn', get offerCall() { return offerCall; },
     async connect(who) {
       if (me && NCEngine.getConnectionStatus() === ConnectionStatus.CONNECTED) {
         me = {...me,name:who.name}; return me;
@@ -87,6 +91,7 @@ export function createNexconnChat(appKey: string, region: keyof typeof AreaCode)
       const r = await NCEngine.connect({token});
       if (!r.isOk || !r.data) throw new Error('Connect failed (' + r.code + ')');
       me = {name:who.name, userId:r.data.userId};
+      try { offerCall ??= setupCalls(); } catch { /* Text chat remains available on browsers without RTC. */ }
       return me;
     },
     async join(room, callbacks) {

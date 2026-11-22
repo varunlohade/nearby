@@ -1,0 +1,10 @@
+.nearby-call {margin:auto;width:min(380px,90vw);padding:20px;border:1px solid #595a54;border-radius:12px;background:#1a1d20;color:#f1eee5;}
+.nearby-call::backdrop {background:#090a0caf;}
+.nearby-call p {margin:10px 0;color:#ccc9bf;}
+.nearby-call footer {display:flex;gap:8px;margin-top:16px;}
+.nearby-call button {border:1px solid #76746d;border-radius:6px;background:#323538;color:inherit;padding:8px 12px;}
+.nearby-call [hidden] {display:none;}
+.call-views {position:relative;}
+.call-views video {width:100%;background:#111;}
+.call-views video+video {position:absolute;right:6px;bottom:6px;width:30%;}
+.call-author {border:0;background:none;color:inherit;font:inherit;padding:0;text-align:left;text-decoration:underline dotted;text-underline-offset:3px;}

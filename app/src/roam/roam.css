@@ -141,3 +141,6 @@
 .roam-progress { display: block; width: 220px; height: 4px; margin: 10px auto 0; border-radius: 2px; background: #ffffff1c; overflow: hidden; }
 .roam-progress s { display: block; height: 100%; width: 5%; background: var(--accent, #f5bd52); transition: width .3s; }
 @media (max-width: 760px) { .roam-enter { bottom: 170px; } .roam-loading-hint { top: 176px; right: auto; left: 10px; } }
+.roam-chat {position:absolute;z-index:4;left:16px;top:70px;max-width:min(300px,64vw);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:#202323ed;color:#f5e8cf;border:1px solid #ffffff36;border-radius:6px;padding:8px 12px;cursor:pointer;}
+body.roam-open > #chat-panel {position:fixed;z-index:75;}
+body.roam-open.chat-open .roam-chat {visibility:hidden;}

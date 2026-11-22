@@ -55,7 +55,14 @@ export function chatPanel(onState: (data: Record<string,string>) => void, onAvai
     div.dataset.at = String(m.at);
     const content = document.createElement('div');
     const author = document.createElement('b');
-    author.textContent = m.name;
+    if (!mine && service?.offerCall) {
+      const call = document.createElement('button');
+      call.type = 'button'; call.className = 'call-author';
+      call.textContent = m.name;
+      call.title = call.ariaLabel = 'Voice or video call with ' + m.name;
+      call.onclick = () => service?.offerCall?.(m.userId,m.name);
+      author.append(call);
+    } else author.textContent = m.name;
     const time = document.createElement('time');
     time.textContent = new Date(m.at).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'});
     const body = document.createElement('p');

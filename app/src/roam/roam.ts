@@ -34,6 +34,7 @@ export interface RoamOptions {
   place?: Place;
   activities: Activity[];
   user: { name: string };
+  openChat: (room: string, title: string, kind: string) => void;
   onExit?: () => void;
 }
 
@@ -253,6 +254,7 @@ class Roam {
       <div class="roam-speed"><b>0</b><small>km/h</small><i><s></s></i></div>
       <aside class="roam-places" hidden><header><b>Places nearby</b><button type="button" aria-label="Close">×</button></header><ol></ol></aside>
       <div class="roam-bigmap" hidden><canvas></canvas><p>Tap anywhere to get a route there</p><button type="button">Close</button></div>
+      <button type="button" class="roam-chat">Talk nearby</button>
       <section class="roam-live" hidden></section>
       <div class="roam-touch" ${this.touch ? '' : 'hidden'}>
         <div class="roam-stick"><i></i></div>
@@ -270,6 +272,11 @@ class Roam {
     document.body.append(this.root);
     const q = <T extends HTMLElement>(s: string) => this.root.querySelector(s) as T;
     q('.roam-exit').onclick = this.exit;
+    q('.roam-chat').onclick = () => {
+      this.keys.clear();
+      const room = this.conversation();
+      this.options.openChat(room.id,room.title,room.kind);
+    };
     q('.roam-help').onclick = () => this.onboarding(true);
     q('.roam-places-btn').onclick = () => this.togglePlaces();
     q('.roam-places header button').onclick = () => this.togglePlaces(false);
@@ -620,7 +627,7 @@ class Roam {
 
   // ---------------------------------------------------------------- input
   private onKey = (e: KeyboardEvent) => {
-    if (this.disposed || (e.target as HTMLElement)?.closest?.('input, textarea, select')) return;
+    if (this.disposed || document.body.classList.contains('chat-open') || document.querySelector('dialog[open]') || (e.target as HTMLElement)?.closest?.('input, textarea, select')) return;
     const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
     const handled = ['w', 'a', 's', 'd', 'q', 'e', 'f', ' ', 'Shift', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'r', 'Escape', 'm', 'g', 'v', '1', '2', '3', 'c', 'h'].includes(k);
     if (!handled) return;
@@ -717,7 +724,7 @@ class Roam {
     this.fpsFrames.push(now);
     while (this.fpsFrames.length && now - this.fpsFrames[0] > 1000) this.fpsFrames.shift();
     const input = this.input();
-    const paused = !this.root.querySelector<HTMLElement>('.roam-onboard')!.hidden;
+    const paused = document.body.classList.contains('chat-open') || Boolean(document.querySelector('dialog[open]')) || !this.root.querySelector<HTMLElement>('.roam-onboard')!.hidden;
     const [px, pz] = this.position(), h = this.heading();
     this.stream.update(px, pz, Math.sin(h), -Math.cos(h));
     if (this.stream.graphVersion !== this.graphVersion) this.onGraphChanged();
@@ -754,6 +761,7 @@ class Roam {
     if (now > this.nextTick) {
       this.nextTick = now + 250;
       this.updateHud();
+      this.root.querySelector<HTMLButtonElement>('.roam-chat')!.textContent = this.conversation().label;
       this.updateListening();
       this.drawMinimap();
       this.findNearCar();
@@ -1367,6 +1375,23 @@ class Roam {
     box.querySelector('button')!.onclick = () => this.onboarding(false);
   }
 
+  private conversation() {
+    const [x,z] = this.position();
+    let closest: Spot | undefined;
+    let distance = LISTEN_RADIUS;
+    for (const spot of this.spots) {
+      if (!spot.id.startsWith('c:')) continue;
+      const d = Math.hypot(spot.x-x,spot.z-z);
+      if (d < distance) { closest = spot; distance = d; }
+    }
+    if (closest) return {id:closest.id.slice(2), title:closest.name, kind:KIND_LABEL[closest.kind] || 'Chat room', label:'Chat · ' + closest.name};
+    // A shared virtual block (roughly 110 m north/south). Only the coarse
+    // avatar block is used for channel routing, never device coordinates.
+    const [lng,lat] = this.frame.toLngLat(x,z);
+    return {id:'roam_' + Math.floor((lng+180)*1000) + '_' + Math.floor((lat+90)*1000),
+      title:'Nearby in Free Roam', kind:'Block chat', label:'Talk nearby'};
+  }
+
   // ---------------------------------------------------------------- live audio venues
   private updateListening() {
     if (this.joining) return;
@@ -1386,7 +1411,20 @@ class Roam {
       this.renderLive(venue, d);
       return;
     }
-    if (nearest && nearest.d < LISTEN_RADIUS && !this.muteUntilOutside.has(nearest.s.id)) void this.listen(nearest.s);
+    const prompt = this.root.querySelector<HTMLElement>('.roam-live')!;
+    if (!nearest || nearest.d >= LISTEN_RADIUS || this.muteUntilOutside.has(nearest.s.id)) {
+      prompt.hidden = true;
+      delete prompt.dataset.invite;
+      return;
+    }
+    prompt.hidden = false;
+    if (prompt.dataset.invite === nearest.s.id) return;
+    prompt.dataset.invite = nearest.s.id;
+    prompt.innerHTML = '<header><b></b></header><div class="roam-live-actions"><button type="button">Listen in</button></div>';
+    prompt.querySelector('b')!.textContent = nearest.s.name;
+    prompt.querySelector('button')!.onclick = () => {
+      if (!this.joining) { delete prompt.dataset.invite; void this.listen(nearest.s); }
+    };
   }
 
   private async listen(venue: Spot, speak = false) {
