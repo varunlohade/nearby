@@ -6,19 +6,29 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:city": "esbuild tests/city.test.ts --bundle --platform=node --format=cjs --outfile=.data/tests/city.test.cjs && node --test --test-force-exit .data/tests/city.test.cjs"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.12.0",
     "@deck.gl/core": "9.4.1",
     "@deck.gl/geo-layers": "9.4.1",
     "@deck.gl/layers": "9.4.1",
     "@deck.gl/mapbox": "9.4.1",
-    "@nexconn/chat": "26.5.1",
-    "@nexconn/engine": "26.5.1",
-    "maplibre-gl": "4.7.1"
+    "@nexconn/call": "26.2.1",
+    "@nexconn/chat": "26.2.0",
+    "@nexconn/engine": "26.2.0",
+    "@upstash/redis": "^1.41.0",
+    "cannon-es": "^0.20.0",
+    "ioredis": "^6.0.0",
+    "maplibre-gl": "4.7.1",
+    "pmtiles": "^4.5.0",
+    "three": "^0.181.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "@types/three": "^0.181.0",
+    "esbuild": "0.25.12",
     "typescript": "^5.6.3",
     "vite": "^6.0.0"
   }

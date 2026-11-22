@@ -1,69 +1,150 @@
-// The only file that talks to the Nexconn Chat SDK for Web (@nexconn/chat).
-// Docs: https://docs.nexconn.ai/chatsdk-web.md  (open channels: /chatsdk-web/open-channel/join.md)
 import {
-  ChannelType, ConnectionStatusHandler, MessageHandler, MessageType, NCEngine, OpenChannel, SendTextMessageParams,
+  AreaCode, ChannelType, ConnectionStatus, ConnectionStatusHandler, Helper, MessageHandler, MessageType,
+  NCEngine, OpenChannel, OpenChannelHandler, OpenChannelMetadataOperationType, SendTextMessageParams,
 } from '@nexconn/chat';
-import type { Message, TextMessageContent } from '@nexconn/chat';
-import type { ChatIdentity, ChatMessage, ChatService } from './types';
+import { NCCallEngine } from '@nexconn/call';
+import { setupCalls } from './calls';
+import type { Message } from '@nexconn/chat';
+import type { ChatIdentity, ChatMessage, ChatService, RoomEvents } from './types';
 
 async function post<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const res = await fetch('/api/nexconn/' + path, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
   const data = await res.json();
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-  return data as T;
+  if (!res.ok) throw new Error(data.error || 'Nexconn request failed');
+  return data;
 }
 
-const toMsg = (m: Message<TextMessageContent>): ChatMessage => ({
-  id: m.messageId, roomId: m.channelIdentifier.channelId, userId: m.senderUserId,
-  name: m.content.senderUserInfo?.name || m.senderUserId, text: m.content.text, at: m.sentTime,
-});
+function decode(m: Message, roomId: string): ChatMessage | undefined {
+  if (m.channelIdentifier.channelType !== ChannelType.OPEN || (m.messageType !== MessageType.TEXT && m.messageType !== MessageType.IMAGE)) return;
+  return {id:m.messageId, roomId, userId:m.senderUserId,
+    name:m.content.senderUserInfo?.name || m.senderUserId, at:m.sentTime,
+    text:m.messageType === MessageType.TEXT ? m.content.text : '', image:m.messageType === MessageType.IMAGE ? m.content.remoteUrl : undefined};
+}
 
-export function createNexconnChat(appKey: string): ChatService {
-  NCEngine.initialize({ appKey });
-  let me: ChatIdentity | null = null;
+export function createNexconnChat(appKey: string, region: keyof typeof AreaCode): ChatService {
+  NCCallEngine.install();
+  NCEngine.initialize({appKey, areaCode:AreaCode[region]});
+  let offerCall: ReturnType<typeof setupCalls> | undefined;
+  let me: ChatIdentity;
   let channel: OpenChannel | null = null;
-  let listener: ((m: ChatMessage) => void) | null = null;
-
+  let roomId = '';
+  let events: RoomEvents | null = null;
+  let values: Record<string,string> = {};
+  let version = 0;
+  let history: ReturnType<typeof OpenChannel.createOpenChannelMessagesQuery> | undefined;
+  async function sync(target: OpenChannel) {
+    const snapshot = ++version;
+    try {
+      const r = await target.getMetadata();
+      if (target !== channel || snapshot !== version) return;
+      if (!r.isOk) throw new Error();
+      values = {...r.data};
+      events?.metadata(values);
+    } catch { if (target === channel && snapshot === version) events?.metadataError(); }
+  }
+  NCEngine.addOpenChannelHandler('nearby', new OpenChannelHandler({
+    onEntered({channelId,response}) {
+      if (channelId !== channel?.channelId) return;
+      events?.availability(true);
+      events?.presence(response.participantCount);
+      void sync(channel);
+    },
+    onParticipantChanged({channelId,participantCount}) { if (channelId === channel?.channelId) events?.presence(participantCount); },
+    onMetadataSynced({channelId}) { if (channelId === channel?.channelId) void sync(channel); },
+    onMetadataChanged({changeInfo}) {
+      for (const item of changeInfo) {
+        if (item.channelId !== channel?.channelId) continue;
+        if (item.operationType === OpenChannelMetadataOperationType.REMOVE) delete values[item.key];
+        else values[item.key] = item.value;
+      }
+      if (channel && changeInfo.some(item => item.channelId === channel?.channelId)) {
+        events?.metadata({...values});
+        void sync(channel);
+      }
+    },
+    onEnterFailed({channelId,code}) { if (channelId === channel?.channelId) events?.availability(false, 'Join failed (' + code + ')'); },
+    onChannelDestroyed({channelId}) { if (channelId === channel?.channelId) events?.availability(false, 'Room expired'); },
+  }));
   NCEngine.addMessageHandler('nearby', new MessageHandler({
-    onMessageReceived({ messages }) {
-      for (const m of messages) {
-        if (m.channelIdentifier.channelType !== ChannelType.OPEN || m.messageType !== MessageType.TEXT) continue;
-        if (channel && m.channelIdentifier.channelId === channel.channelId) listener?.(toMsg(m));
+    onMessageReceived({messages}) {
+      for (const raw of messages) {
+        if (raw.channelIdentifier.channelId !== channel?.channelId) continue;
+        const msg = decode(raw, roomId);
+        if (msg) events?.message(msg);
       }
     },
   }));
   NCEngine.addConnectionStatusHandler('nearby', new ConnectionStatusHandler({
-    onConnectionStatusChanged({ status, code }) { console.info('[nexconn] status', status, code); },
+    onConnectionStatusChanged({status}) {
+      if (status !== ConnectionStatus.CONNECTED) events?.availability(false, status === ConnectionStatus.DISCONNECTED ? 'Disconnected' : 'Reconnecting…');
+    },
   }));
-
+  function current(id: string) {
+    if (!channel || roomId !== id) throw new Error('Room changed');
+    return channel;
+  }
   return {
-    mode: 'nexconn',
-    label: 'live on Nexconn',
+    mode:'nexconn', get offerCall() { return offerCall; },
     async connect(who) {
-      if (me?.userId === who.userId) return;
-      if (me) await NCEngine.disconnect();
-      const { token } = await post<{ token: string }>('/api/nexconn/token', who);
-      const r = await NCEngine.connect({ token });
-      if (!r.isOk) throw new Error(`Nexconn connect failed, code ${r.code}`);
-      me = who;
+      if (me && NCEngine.getConnectionStatus() === ConnectionStatus.CONNECTED) {
+        me = {...me,name:who.name}; return me;
+      }
+      const {token} = await post<{token:string}>('token', {name:who.name});
+      const r = await NCEngine.connect({token});
+      if (!r.isOk || !r.data) throw new Error('Connect failed (' + r.code + ')');
+      me = {name:who.name, userId:r.data.userId};
+      try { offerCall ??= setupCalls(); } catch { /* Text chat remains available on browsers without RTC. */ }
+      return me;
     },
-    async ensureRoom(roomId) { await post('/api/nexconn/room', { channelId: roomId }); },
-    async join(roomId, onMessage) {
-      if (channel) await channel.exitChannel();
-      await this.ensureRoom(roomId);
-      channel = new OpenChannel(roomId);
-      listener = onMessage;
-      // The SDK delivers the last messages through the message handler after entering.
-      const r = await channel.enterChannel({ messageCount: 20 });
-      if (!r.isOk) throw new Error(`Could not enter room, code ${r.code}`);
-      return [];
+    async join(room, callbacks) {
+      const {channelId} = await post<{channelId:string}>('room', {channelId:room.id});
+      channel = new OpenChannel(channelId);
+      roomId = room.id;
+      events = callbacks; values = {};
+      const r = await channel.enterChannel({messageCount:30});
+      if (!r.isOk) throw new Error('Join failed (' + r.code + ')');
+      if (r.data) callbacks.presence(r.data.participantCount);
+      callbacks.availability(true);
+      void sync(channel);
     },
-    async leave() { await channel?.exitChannel(); channel = null; listener = null; },
-    async send(roomId, text) {
-      if (!me || !channel || channel.channelId !== roomId) throw new Error('not in this room');
-      const r = await channel.sendMessage(new SendTextMessageParams({ text, senderUserInfo: { userId: me.userId, name: me.name } }));
-      if (!r.isOk || !r.data) throw new Error(`Send failed, code ${r.code}`);
-      return toMsg(r.data as Message<TextMessageContent>);
+    async leave() {
+      const previous = channel;
+      channel = null; roomId = ''; events = null; history = undefined;
+      if (previous) await previous.exitChannel();
+    },
+    async send(id,text,file) {
+      const senderUserInfo = {userId:me.userId, name:me.name};
+      const target = current(id);
+      const send = async () => {
+        if (!file) return target.sendMessage(new SendTextMessageParams({text,senderUserInfo}));
+        const prepared = await Helper.createSendImageMessageParams(file);
+        if (!prepared.isOk || !prepared.data) throw new Error('Could not prepare photo');
+        prepared.data.content.senderUserInfo = senderUserInfo;
+        return current(id).sendMediaMessage(prepared.data);
+      };
+      const r = await send();
+      if (!r.isOk || !r.data) throw new Error('Send failed (' + r.code + ')');
+      return decode(r.data,id)!;
+    },
+    async earlier(id,before) {
+      const target = current(id);
+      history ??= OpenChannel.createOpenChannelMessagesQuery({channelId:target.channelId, pageSize:30, isAscending:false, startTime:before});
+      const query = history;
+      const r = await query.loadNextPage();
+      if (!r.isOk || !r.data) throw new Error('History unavailable (' + r.code + ')');
+      return {messages:r.data.data.map(m => decode(m,id)).filter((m): m is ChatMessage => !!m), more:query.hasNext && r.data.data.length > 0};
+    },
+    async write(id,key,value) {
+      const target = current(id);
+      const r = value === null ? await target.deleteMetadata({keys:[key]}) :
+        await target.setMetadata({metadata:{[key]:value}, deleteWhenLeft:false, overwrite:false});
+      if (!r.isOk) throw new Error('Room update failed (' + r.code + ')');
+      if (channel === target) {
+        if (value === null) delete values[key]; else values[key] = value;
+        ++version;
+        events?.metadata({...values});
+        void sync(target);
+      }
     },
   };
 }

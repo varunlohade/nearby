@@ -1,15 +1,197 @@
 <!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>nearby</title>
-<meta name="description" content="See what is happening near you, build your neighbourhood, and chat with your people.">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&display=swap" rel="stylesheet">
-</head>
-<body>
-<div id="map"></div>
-<script type="module" src="/src/main.ts"></script>
-</body>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#0b1020" />
+    <meta name="description" content="A live map of what's happening around you. Create events, communities and live audio rooms anywhere, talk to neighbours and people around the world, ask an AI local guide, browse the city marketplace and pick the next play at local games." />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="nearby" />
+    <meta property="og:title" content="nearby — your world, live" />
+    <meta property="og:description" content="Create events and communities anywhere, talk to people nearby and around the world, ask an AI local guide, browse the city marketplace and pick the next play at local games." />
+    <meta property="og:url" content="https://nearby-world.vercel.app/" />
+    <meta property="og:image" content="https://nearby-world.vercel.app/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:image" content="https://nearby-world.vercel.app/og.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:ital,wght@0,600;0,700;0,800;1,800&family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet" />
+    <title>nearby — your world, live</title>
+  </head>
+  <body>
+    <canvas id="world" aria-label="Interactive three-dimensional Earth"></canvas>
+    <div id="street-atlas" aria-label="Street map of nearby activities"><div class="roam-avatar" aria-hidden="true"><i></i></div><span class="tile-status">Street detail unavailable</span></div>
+    <div class="vignette" aria-hidden="true"></div>
+
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="nearby home">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span class="brand-word">Nearby</span>
+      </a>
+      <button class="place-chip hidden" id="place-pill" type="button" aria-label="Change area">
+        <span class="pulse-dot"></span>
+        <span class="place-chip-name" id="place-pill-label">Locating…</span>
+        <span class="place-chip-coords mono" id="place-pill-coords"></span>
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m5 6.5 3 3 3-3"/></svg>
+      </button>
+      <div class="top-actions">
+        <button id="phone-more" type="button" class="round-button" aria-label="More map options" popovertarget="phone-options">•••</button>
+        <button class="round-button hidden" id="globe-button" type="button" aria-label="Back to globe" title="Back to globe">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.4 2.3 3.6 5.1 3.6 8.5s-1.2 6.2-3.6 8.5c-2.4-2.3-3.6-5.1-3.6-8.5s1.2-6.2 3.6-8.5Z"/></svg>
+        </button>
+
+      </div>
+    </header>
+
+    <main id="app">
+      <nav class="phone-dock" aria-label="Explore the map">
+        <button type="button" id="phone-activities" aria-expanded="false" aria-controls="activity-panel"><svg viewBox="0 0 24 24"><circle cx="5" cy="6" r="1"/><circle cx="5" cy="12" r="1"/><circle cx="5" cy="18" r="1"/><path d="M10 6h10M10 12h10M10 18h10"/></svg>Activities</button>
+        <button type="button" data-map-action="#mobile-chat"><svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 1-8 8H7l-4 3 1-7a8 8 0 1 1 16-4Z"/></svg>Chat</button>
+        <button type="button" data-map-action="#host-start"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v8m-4-4h8"/></svg>Create</button>
+        <button type="button" data-city-market><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10h16l-2-6H6l-2 6Zm1 1v9h14v-9M9 20v-6h5v6"/></svg>Market</button>
+        <button type="button" data-city-games><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m12 8 4 3-2 5h-4l-2-5z"/></svg>Games</button>
+      </nav>
+      <nav id="phone-options" popover aria-label="Map options">
+        <button type="button" data-map-action="#map-home">Show all activities</button>
+        <button type="button" data-map-action="#pin-mode">Place waypoint</button>
+        <div class="phone-zoom"><button type="button" data-map-action="#map-minus">Zoom out</button><button type="button" data-map-action="#map-plus">Zoom in</button></div>
+        <button type="button" data-map-action="#globe-button">Back to globe</button>
+        <button type="button" data-map-action=".cm-agents-top">Connect your agent</button>
+        <button type="button" data-map-action=".landing-about-button">About Nearby</button>
+      </nav>
+      <section class="arrival" id="arrival" aria-live="polite">
+        <span class="mono kicker" id="arrival-kicker">nearby · live everywhere</span>
+        <h1 id="arrival-title">Your world,<br /><em>live.</em></h1>
+        <p id="arrival-copy">See what's happening around you, start something anywhere, and talk to people nearby and around the world.</p>
+        <div class="loader">
+          <div class="loader-track"><i id="progress"></i></div>
+          <div class="loader-meta mono"><span id="arrival-status">Building Earth</span><span id="progress-number">08%</span></div>
+        </div>
+      </section>
+
+      <aside class="nearby panel hidden" id="activity-panel" aria-label="Happening nearby">
+        <nav class="city-shortcuts" aria-label="In your city">
+          <button type="button" data-city-market><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10h16l-2-6H6l-2 6Zm1 1v9h14v-9M9 20v-6h5v6"/></svg>Marketplace</button>
+          <button type="button" data-city-games><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m12 8 4 3-2 5h-4l-2-5z"/></svg>Live games</button>
+        </nav>
+        <header class="nearby-head">
+          <div class="index-heading"><h2>Activities</h2><span class="index-count mono" id="activity-count">0</span><button type="button" id="host-start" title="Create a chat room, event or audio session on the map">+ Create</button></div>
+          <p id="activity-caption">Finding Luma events…</p>
+        </header>
+        <div class="activity-list" id="activity-list"></div>
+      </aside>
+
+      <button class="chat-launcher hidden" id="mobile-chat" type="button">
+        <span class="radio-icon" aria-hidden="true">◖)))</span><span class="launcher-copy"><b id="launcher-room">Area chat</b></span>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5l7 7-7 7"/></svg>
+      </button>
+
+      <aside class="chat panel hidden collapsed" id="chat-panel" aria-label="Area chat">
+        <header class="chat-head">
+          <div>
+            <span class="mono kicker" id="room-kind">Area channel</span>
+            <h2 id="room-title">Local chat</h2>
+          </div>
+          <button class="round-button ghost" id="chat-close" type="button" aria-label="Close chat">
+            <svg viewBox="0 0 24 24"><path d="M7 7l10 10M17 7 7 17"/></svg>
+          </button>
+        </header>
+        <div class="history-bar" id="history-bar" hidden><button type="button" id="earlier">Earlier messages</button></div>
+        <div class="messages" id="messages" role="log" aria-label="Messages"></div>
+        <form class="composer" id="composer">
+          <button type="button" id="attach-photo" aria-label="Send a photo" title="Send a photo">▧</button>
+          <input type="file" id="photo-file" accept="image/jpeg,image/png,image/webp" hidden />
+          <input id="message-input" aria-label="Chat message" maxlength="500" autocomplete="off" placeholder="Say hi to your area…" />
+          <button type="submit" aria-label="Send message">
+            <svg viewBox="0 0 24 24"><path d="M5 12h13M13 6l6 6-6 6"/></svg>
+          </button>
+        </form>
+        <footer class="mono"><span id="chat-mode">Connecting…</span><span id="room-presence"></span><button type="button" id="chat-name" title="Change chat name" aria-label="Change chat name"></button><button id="retry-chat" type="button" hidden>Reconnect</button></footer>
+      </aside>
+
+      <section class="event panel hidden" id="event-sheet" role="dialog" aria-modal="false" aria-labelledby="event-title">
+        <div class="poster">
+          <img id="event-image" alt="" />
+          <span class="poster-type" id="event-kind"></span>
+          <strong id="poster-title" aria-hidden="true"></strong>
+          <button class="round-button event-close" id="sheet-close" type="button" aria-label="Close event preview">
+            <svg viewBox="0 0 24 24"><path d="M7 7l10 10M17 7 7 17"/></svg>
+          </button>
+        </div>
+        <div class="event-body">
+          <time id="event-time"></time>
+          <h2 id="event-title"></h2>
+          <p class="event-venue"><span aria-hidden="true">⌖</span> <span id="event-place"></span> · <span id="event-distance"></span></p>
+          <p id="event-description"></p>
+          <div class="guest-line">
+            <div class="guest-stack" id="event-guests" aria-hidden="true"></div>
+            <div><b id="event-people"></b><small id="guest-names"></small></div>
+          </div>
+          <div class="event-actions"><a id="luma-link" target="_blank" rel="noopener noreferrer" hidden>View on Luma ↗</a><button id="rsvp" type="button" aria-pressed="false">RSVP</button>
+          <button class="event-chat" id="join-conversation" type="button">Event chat <span aria-hidden="true">↗</span></button></div>
+          <button id="event-predictions" type="button" data-city-games hidden>Game predictions</button>
+          <small id="event-status" role="status"></small>
+        </div>
+      </section>
+
+      <div class="hud mono hidden" id="hud">
+        <div class="district"><span class="district-meta">Current area</span><h1 id="locality-title">Your area</h1><span id="hud-coords"></span></div>
+      </div>
+      <button id="search-map-area" type="button" hidden>Search this area</button>
+      <nav class="map-tools" aria-label="Map controls">
+        <button id="create-mode" aria-label="Create here: chat room, event or audio" title="Create here (or right-click / long-press the map)">+</button>
+        <button id="pin-mode" aria-label="Place waypoint" title="Place waypoint" aria-pressed="false">⚑</button>
+        <button id="map-home" aria-label="Show all activities" title="Show all activities">⌖</button>
+        <button id="map-plus" aria-label="Zoom in" title="Zoom in">+</button>
+        <button id="map-minus" aria-label="Zoom out" title="Zoom out">−</button>
+      </nav>
+      <div class="waypoint-control" id="waypoint-control" hidden><span id="waypoint-status" role="status"></span><button type="button" id="pin-center">Pin map center</button><button type="button" id="host-here" hidden>Host an event here</button><button type="button" id="pin-clear">Cancel</button></div>
+    </main>
+
+    <dialog class="location-dialog" id="name-dialog">
+      <form class="dialog-card" id="name-form">
+        <h2>Your chat name</h2>
+        <label>Display name<input name="name" required maxlength="40" autocomplete="nickname" /></label>
+        <div class="host-actions"><button type="button" id="name-cancel">Cancel</button><button type="submit">Save</button></div>
+      </form>
+    </dialog>
+    <dialog class="location-dialog" id="host-dialog">
+      <form id="host-form" class="dialog-card">
+        <h2>Host at this pin</h2>
+        <p>The venue pin and event details will be shared with the area.</p>
+        <label>Event name<input name="title" required maxlength="75" /></label>
+        <label>Venue<input name="venue" required maxlength="70" /></label>
+        <label>Starts at<input name="start" type="datetime-local" required /></label>
+        <label>Category<select name="kind"><option value="talk">Talk</option><option value="sport">Sport</option><option value="culture">Music</option><option value="social">Meetup</option><option value="wellness">Outdoors</option><option value="help">Community</option></select></label>
+        <div class="host-actions"><button type="button" id="host-cancel">Cancel</button><button type="submit">Publish event</button></div>
+        <small id="host-status" role="status"></small>
+      </form>
+    </dialog>
+
+    <dialog class="location-dialog" id="location-dialog" aria-labelledby="location-title">
+      <div class="dialog-card">
+        <button class="round-button ghost dialog-close" type="button" aria-label="Close">
+          <svg viewBox="0 0 24 24"><path d="M7 7l10 10M17 7 7 17"/></svg>
+        </button>
+        <span class="mono kicker">Change area</span>
+        <h2 id="location-title">Where should we land?</h2>
+        <p>Your network gives a rough guess. Search for a place, or use your device for a closer match.</p>
+        <label class="search-field">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg>
+          <input id="location-search" autofocus placeholder="Search a city or neighbourhood" autocomplete="off" aria-label="Search a city or neighbourhood" />
+        </label>
+        <div class="search-results" id="search-results" aria-live="polite"></div>
+        <button class="secondary-button" id="precise-location" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="8"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22"/></svg>
+          <span aria-live="polite">Use my current location</span>
+        </button>
+      </div>
+    </dialog>
+
+    <a class="earth-credit" href="https://science.nasa.gov/resource/earth-with-clouds-3d-model/">Earth model · NASA / VTAD</a>
+    <div class="attribution hidden" id="attribution">Map © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> · OpenFreeMap · OpenMapTiles<span class="roam-credit"> · <a href="https://docs.overturemaps.org/attribution/">Overture Maps</a></span></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
 </html>
