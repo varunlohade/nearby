@@ -14,9 +14,9 @@ async function post<T>(path: string, body: unknown): Promise<T> {
   return data;
 }
 
-function decode(m: Message): ChatMessage | undefined {
+function decode(m: Message, roomId: string): ChatMessage | undefined {
   if (m.channelIdentifier.channelType !== ChannelType.OPEN || (m.messageType !== MessageType.TEXT && m.messageType !== MessageType.IMAGE)) return;
-  return {id:m.messageId, roomId:m.channelIdentifier.channelId, userId:m.senderUserId,
+  return {id:m.messageId, roomId, userId:m.senderUserId,
     name:m.content.senderUserInfo?.name || m.senderUserId, at:m.sentTime,
     text:m.messageType === MessageType.TEXT ? m.content.text : '', image:m.messageType === MessageType.IMAGE ? m.content.remoteUrl : undefined};
 }
@@ -27,6 +27,7 @@ export function createNexconnChat(appKey: string, region: keyof typeof AreaCode)
   let offerCall: ReturnType<typeof setupCalls> | undefined;
   let me: ChatIdentity;
   let channel: OpenChannel | null = null;
+  let roomId = '';
   let events: RoomEvents | null = null;
   let values: Record<string,string> = {};
   let version = 0;
@@ -67,8 +68,9 @@ export function createNexconnChat(appKey: string, region: keyof typeof AreaCode)
   NCEngine.addMessageHandler('nearby', new MessageHandler({
     onMessageReceived({messages}) {
       for (const raw of messages) {
-        const msg = decode(raw);
-        if (msg && msg.roomId === channel?.channelId) events?.message(msg);
+        if (raw.channelIdentifier.channelId !== channel?.channelId) continue;
+        const msg = decode(raw, roomId);
+        if (msg) events?.message(msg);
       }
     },
   }));
@@ -78,7 +80,7 @@ export function createNexconnChat(appKey: string, region: keyof typeof AreaCode)
     },
   }));
   function current(id: string) {
-    if (!channel || channel.channelId !== id) throw new Error('Room changed');
+    if (!channel || roomId !== id) throw new Error('Room changed');
     return channel;
   }
   return {
@@ -95,8 +97,9 @@ export function createNexconnChat(appKey: string, region: keyof typeof AreaCode)
       return me;
     },
     async join(room, callbacks) {
-      await post('room', {channelId:room.id});
-      channel = new OpenChannel(room.id);
+      const {channelId} = await post<{channelId:string}>('room', {channelId:room.id});
+      channel = new OpenChannel(channelId);
+      roomId = room.id;
       events = callbacks; values = {};
       const r = await channel.enterChannel({messageCount:30});
       if (!r.isOk) throw new Error('Join failed (' + r.code + ')');
@@ -106,7 +109,7 @@ export function createNexconnChat(appKey: string, region: keyof typeof AreaCode)
     },
     async leave() {
       const previous = channel;
-      channel = null; events = null; history = undefined;
+      channel = null; roomId = ''; events = null; history = undefined;
       if (previous) await previous.exitChannel();
     },
     async send(id,text,file) {
@@ -121,15 +124,15 @@ export function createNexconnChat(appKey: string, region: keyof typeof AreaCode)
       };
       const r = await send();
       if (!r.isOk || !r.data) throw new Error('Send failed (' + r.code + ')');
-      return decode(r.data)!;
+      return decode(r.data,id)!;
     },
     async earlier(id,before) {
-      current(id);
-      history ??= OpenChannel.createOpenChannelMessagesQuery({channelId:id, pageSize:30, isAscending:false, startTime:before});
+      const target = current(id);
+      history ??= OpenChannel.createOpenChannelMessagesQuery({channelId:target.channelId, pageSize:30, isAscending:false, startTime:before});
       const query = history;
       const r = await query.loadNextPage();
       if (!r.isOk || !r.data) throw new Error('History unavailable (' + r.code + ')');
-      return {messages:r.data.data.map(decode).filter((m): m is ChatMessage => !!m), more:query.hasNext && r.data.data.length > 0};
+      return {messages:r.data.data.map(m => decode(m,id)).filter((m): m is ChatMessage => !!m), more:query.hasNext && r.data.data.length > 0};
     },
     async write(id,key,value) {
       const target = current(id);

@@ -63,8 +63,12 @@ export function nexconnApi(c: Creds) {
       }
       if (req.url === '/api/nexconn/room') {
         if (session.cookie) return send(401, {error:'Connect first'});
-        const channelId = body.channelId;
-        if (typeof channelId !== 'string' || !/^nearby_[a-z0-9_-]{1,57}$/.test(channelId)) return send(400, {error:'Invalid room'});
+        const roomId = body.channelId;
+        if (typeof roomId !== 'string' || !roomId.startsWith('nearby_') || roomId.length <= 7)
+          return send(400, {error:'Choose a conversation on the map.'});
+        // Keep existing channel histories. External event IDs can be mixed-case or long.
+        const channelId = /^nearby_[a-z0-9_-]{1,57}$/.test(roomId)
+          ? roomId : 'nearby_ext_' + createHash('sha256').update(roomId).digest('hex').slice(0, 48);
         const path = '/v4/open-channel/';
         const existing = await call(c, path+'get', {channelId});
         if (existing.code === 0) return send(200, {channelId});
