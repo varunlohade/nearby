@@ -87,7 +87,6 @@ export function mountCommunities(options: Options) {
     el.type = 'button';
     el.className = 'cm-pin';
     el.style.setProperty('--cm', c.color);
-    el.setAttribute('aria-label', 'Community: ' + c.name);
     el.innerHTML = `<span class="cm-pin-face">${esc(c.emoji)}</span><span class="cm-pin-name">${esc(c.name)}</span>`;
     el.onclick = event => { event.stopPropagation(); void openCommunity(c.id); };
     return el;
@@ -97,6 +96,7 @@ export function mountCommunities(options: Options) {
     for (const [cid, marker] of markers) if (!seen.has(cid)) { marker.remove(); markers.delete(cid); }
     for (const c of communities) {
       if (!markers.has(c.id)) markers.set(c.id, new maplibregl.Marker({ element: pin(c), anchor: 'bottom' }).setLngLat([c.lng, c.lat]).addTo(options.map()));
+      markers.get(c.id)!.getElement().setAttribute('aria-label', 'Community: ' + c.name);
       markers.get(c.id)!.getElement().classList.toggle('is-joined', !!c.joined);
     }
   }

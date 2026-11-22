@@ -107,10 +107,11 @@ export function mountAsk(options: AskOptions) {
       pin.type = 'button';
       pin.className = 'ask-pin';
       pin.dataset.ask = String(index);
-      pin.setAttribute('aria-label', `${index + 1}. ${place.name}`);
       pin.innerHTML = `<b>${index + 1}</b><span>${escapeHtml(place.name)}</span>`;
       pin.onclick = event => { event.stopPropagation(); focusPin(index + 1); };
-      return new maplibregl.Marker({ element: pin, anchor: 'bottom' }).setLngLat([place.lng, place.lat]).addTo(options.map());
+      const marker = new maplibregl.Marker({ element: pin, anchor: 'bottom' }).setLngLat([place.lng, place.lat]).addTo(options.map());
+      pin.setAttribute('aria-label', `${index + 1}. ${place.name}`);
+      return marker;
     });
     placesList.innerHTML = pins.map((p, i) => {
       const line = [p.address, p.detail].filter(Boolean).join(' · ');

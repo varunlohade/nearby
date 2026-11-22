@@ -11,6 +11,12 @@ import { chatPanel as createChatPanel } from './chat/panel';
 import { EarthExperience, type Activity, type Place } from './world/earth';
 
 import './ui/phone-map.css';
+import { mountPhoneNavigation, type PhonePanel } from './ui/phone-navigation';
+import { mountMarket } from './city/market';
+import { mountGames } from './city/games';
+import { cityScope } from './city/scope';
+import './ui/daylight.css';
+import './ui/trail-panel.css';
 
 if (new URLSearchParams(location.search).has('instant')) document.documentElement.classList.add('instant');
 
@@ -168,6 +174,18 @@ function setActive(id: string | null) {
 
 let opener: HTMLElement | null = null;
 
+let requestedBoard: HTMLElement | undefined;
+document.addEventListener('click', event => {
+  const trigger = (event.target as Element).closest<HTMLElement>('[data-city-games],[data-city-market]');
+  if (!trigger || (place && cityScope(place))) return;
+  event.stopImmediatePropagation();
+  requestedBoard = trigger;
+  searchVersion++;
+  searchResults.textContent = 'Choose a city to see local listings and games.';
+  locationDialog.showModal();
+  searchInput.focus();
+}, true);
+
 const phoneActivities = $<HTMLButtonElement>('#phone-activities');
 function showPhoneActivities(open: boolean) {
   activityPanel.classList.toggle('phone-open', open);
@@ -177,11 +195,13 @@ phoneActivities.onclick = () => showPhoneActivities(!activityPanel.classList.con
 document.addEventListener('click', event => {
   const clicked = event.target as Element;
   if (!clicked.closest('#phone-activities,#activity-panel') || clicked.closest('#activity-panel button')) showPhoneActivities(false);
-  const action = clicked.closest<HTMLButtonElement>('[data-map-action]')?.dataset.mapAction;
-  if (action) {
+  const trigger = clicked.closest<HTMLButtonElement>('[data-map-action]');
+  const action = trigger?.dataset.mapAction;
+  if (trigger && action) {
     const menu = $('#phone-options');
     if (menu.matches(':popover-open')) menu.hidePopover();
-    $<HTMLButtonElement>(action)?.click();
+    if (action === '#host-start') startCreate(trigger);
+    else $<HTMLButtonElement>(action)?.click();
   }
 });
 document.addEventListener('keydown', event => {
@@ -198,7 +218,7 @@ function openEvent(id: string, trigger: HTMLElement) {
   setChatOpen(false);
   void chat.openArea();
   previewId = id;
-  opener = trigger;
+  opener = trigger.closest('#activity-panel') && matchMedia('(max-width: 720px)').matches ? phoneActivities : trigger;
   eventSheet.className = `event panel type-${event.kind}`;
   $('#event-status').textContent = '';
   $('#event-kind').textContent = event.luma ? 'Luma event' : kindLabel[event.kind] + ' / Hosted event';
@@ -212,6 +232,10 @@ function openEvent(id: string, trigger: HTMLElement) {
   $('#event-description').textContent = event.description;
   $('#event-place').textContent = event.place;
   $('#event-time').textContent = event.time;
+  const predictions = $('#event-predictions');
+  predictions.hidden = event.kind !== 'sport';
+  predictions.dataset.gameTitle = event.title;
+  predictions.dataset.gameVenue = event.place;
   $('#event-distance').textContent = `${event.distance.toFixed(1)} km`;
   updateAttendance();
   setActive(id);
@@ -232,10 +256,12 @@ function closeEvent(restoreFocus = false) {
 function openMapConversation(id:string,title:string,kind:string) {
   closeEvent();
   if (/^p[a-f0-9]{12}$/.test(id)) { openPrivateRoom(id,title,chat.user.name); return; }
-  void chat.openRoom(id,title,kind); setChatOpen(true);
+  void chat.openRoom(id,title,kind); setChatOpen(true, {type: 'room', id, title, kind});
 }
 
-function setChatOpen(open: boolean) {
+let chatRoute: PhonePanel = {type: 'chat'};
+function setChatOpen(open: boolean, route: PhonePanel = {type: 'chat'}) {
+  chatRoute = route;
   if (open && document.body.classList.contains('roam-open')) document.body.append(chatPanel);
   else if (chatPanel.parentElement === document.body) $('#app').append(chatPanel);
   chatPanel.classList.toggle('collapsed', !open);
@@ -312,7 +338,6 @@ function connectArea(current: Place) {
 }
 
 function selectPlace(nextPlace: Place, landing: boolean) {
-  setRoam(false);
   place = nextPlace;
   metadata = {};
   lumaEvents = [];
@@ -401,6 +426,29 @@ async function start() {
     map: () => atlas['map'], place: () => place, user: () => chat.user,
     openChat: openMapConversation,
   });
+  mountMarket(() => place);
+  mountGames(() => place);
+  mountPhoneNavigation(() => {
+    if (document.body.classList.contains('chat-open')) return chatRoute;
+    if (previewId) return {type: 'preview', id: previewId};
+    if (activityPanel.classList.contains('phone-open')) return {type: 'activities'};
+  }, route => {
+    if (previewId) { closeEvent(true); atlas.home(); }
+    if (document.body.classList.contains('chat-open')) $('#chat-close').click();
+    showPhoneActivities(route?.type === 'activities');
+    if (!route || route.type === 'activities') return;
+    if (route.type === 'chat') { mobileChat.click(); return; }
+    if (route.type === 'room') {
+      openMapConversation(route.id, route.title, route.kind);
+      return;
+    }
+    const id = route.id;
+    const row = activityList.querySelector<HTMLElement>(`[data-event="${CSS.escape(id)}"]`);
+    if (row) {
+      openEvent(id, row);
+      if (route.type === 'event-chat') $('#join-conversation').click();
+    }
+  });
   const landing = mountLanding();
   world = new EarthExperience(canvas);
   world.enableNavigation(canvas, (lat,lng) => { void landOnGlobe(lat,lng); });
@@ -414,9 +462,6 @@ async function start() {
     setProgress(8, 'Building Earth');
     await world.ready((value, label) => setProgress(8 + value * 25, label));
     await landAt(await placeAt(at[0], at[1]));
-    if (new URLSearchParams(location.search).get('meet') === '1' && Math.abs(at[0]) <= 85 && Math.abs(at[1]) <= 180) {
-      meeting = [at[1],at[0]]; $('#enter-roam').click();
-    }
     return;
   }
   setProgress(8, 'Building Earth');
@@ -437,7 +482,10 @@ document.addEventListener('click', (event) => {
 $('#sheet-close').onclick = () => { closeEvent(true); atlas.home(); };
 $('#join-conversation').onclick = () => {
   const item = activities.find(activity => activity.id === previewId);
-  if (item) { void chat.openEvent(item.id,item.title); setChatOpen(true); }
+  if (item) {
+    void chat.openEvent(item.id,item.title);
+    setChatOpen(true, {type: 'event-chat', id: item.id});
+  }
 };
 $('#rsvp').onclick = async () => {
   const id = previewId;
@@ -451,50 +499,21 @@ $('#rsvp').onclick = async () => {
 $('#chat-close').onclick = () => { setChatOpen(false); void chat.openArea(); };
 mobileChat.onclick = () => { void chat.openArea(); setChatOpen(true); };
 addEventListener('keydown', (event) => {
-  if (event.key !== 'Escape' || document.querySelector('.nearby-call[open]') || locationDialog.open || hostDialog.open || $<HTMLDialogElement>('#name-dialog').open) return;
+  if (event.key !== 'Escape' || document.querySelector('dialog:modal')) return;
   if (!eventSheet.classList.contains('hidden')) closeEvent(true);
   else if (!chatPanel.classList.contains('collapsed')) { setChatOpen(false); void chat.openArea(); }
 });
-function setRoam(active: boolean) {
-  atlas.toggleRoam(active);
-  document.body.classList.toggle('roaming', active);
-  $('#roam-controls').hidden = !active;
-  $('.district-meta').textContent = active ? 'Free roam' : 'Current area';
-}
-let meeting: [number,number] | undefined;
-$('#enter-roam').onclick = () => {
-  const target = meeting; meeting = undefined;
-  if (target) atlas['map'].jumpTo({center:target});
-  closeEvent();
-  setChatOpen(false);
-  // Free Roam: drive, walk or fly through this area (src/roam).
-  // Loaded on demand so Free Roam (three.js scene code, physics, character) does not grow the first load.
-  void import('./roam/roam').then(({ openRoam }) =>
-    openRoam({ map: atlas['map'], place, activities, user: chat.user,
-      openChat: openMapConversation, meeting:target, liveUser:() => ({name:chat.user.name,canCall:chat.canCall}), callUser:chat.callUser,
-      onExit: () => { setChatOpen(false); void chat.openArea(); $('#enter-roam').focus({preventScroll: true}); } }));
+locationDialog.querySelector<HTMLButtonElement>('.dialog-close')!.onclick = () => locationDialog.close();
+placePill.onclick = () => {
+  requestedBoard = undefined;
+  searchVersion++;
+  locationDialog.showModal();
 };
-$('#leave-roam').onclick = () => {
-  setRoam(false);
-  $('#enter-roam').focus({preventScroll: true});
-};
-document.querySelectorAll<HTMLButtonElement>('[data-step]').forEach(button => {
-  button.onclick = () => atlas.step(button.dataset.step!);
-});
-const roamKeys: Record<string,string> = {w:'forward', s:'back', a:'left', d:'right'};
-addEventListener('keydown', event => {
-  if (!document.body.classList.contains('roaming') || document.querySelector('dialog[open]') ||
-      document.body.classList.contains('chat-open') || event.ctrlKey || event.metaKey || event.altKey) return;
-  const direction = roamKeys[event.key.toLowerCase()];
-  if (direction) { event.preventDefault(); atlas.step(direction); }
-});
-placePill.onclick = () => locationDialog.showModal();
 $('#map-plus').onclick = () => atlas.zoom(1);
 $('#map-minus').onclick = () => atlas.zoom(-1);
 $('#map-home').onclick = () => { closeEvent(); atlas.home(); };
 
 globeButton.onclick = async () => {
-  setRoam(false);
   globeButton.classList.add('hidden');
   placePill.classList.add('hidden');
   document.body.classList.remove('on-map');
@@ -533,6 +552,9 @@ async function placeAt(latitude:number, lng:number): Promise<Place> {
       region = address.state || ''; country = address.country || '';
     }
   } catch { /* The globe selection remains usable without a place name. */ }
+  if (city === fallback && Math.abs(lat-17.466)<0.008 && Math.abs(lng-78.357)<0.008) {
+    return {lat,lng,locality:'Kondapur',city:'Hyderabad',region:'Telangana',country:'India',source:'fallback'};
+  }
   return {lat,lng,locality,city,region,country,source:'globe'};
 }
 
@@ -563,10 +585,11 @@ searchMapArea.onclick = async () => {
 const hostDialog = $<HTMLDialogElement>('#host-dialog');
 const hostForm = $<HTMLFormElement>('#host-form');
 let hostedId = '';
-$('#host-start').onclick = () => {
+function startCreate(trigger: HTMLElement) {
   closeEvent(); setChatOpen(false); void chat.openArea();
-  create?.start();
-};
+  create?.start(trigger);
+}
+$('#host-start').onclick = event => startCreate(event.currentTarget as HTMLElement);
 $('#host-here').onclick = () => {
   void chat.openArea();
   $('#host-status').textContent = '';
@@ -602,9 +625,39 @@ hostForm.onsubmit = async e => {
   finally { button.disabled = false; }
 };
 
+async function choosePickerPlace(next: Place) {
+  const trigger = requestedBoard;
+  if (trigger && !cityScope(next)) {
+    searchResults.textContent = 'Choose a named city to continue.';
+    searchInput.focus();
+    return;
+  }
+  requestedBoard = undefined;
+  locationDialog.close();
+  await landAt(next);
+  if (trigger && place === next) {
+    const board = trigger.hasAttribute('data-city-games') ? 'games' : 'market';
+    (trigger.isConnected ? trigger : $(`.phone-dock [data-city-${board}]`)).click();
+  }
+}
+
 let searchTimer = 0;
+let searchVersion = 0;
+const preciseLabel = $('#precise-location span');
+locationDialog.addEventListener('close', () => {
+  if (locationDialog.open) return;
+  requestedBoard = undefined;
+  preciseLabel.textContent = 'Use my current location';
+  searchVersion++;
+  clearTimeout(searchTimer);
+  searchResults.replaceChildren();
+  searchInput.value = '';
+});
 searchInput.addEventListener('input', () => {
+  const version = ++searchVersion;
+  preciseLabel.textContent = 'Use my current location';
   window.clearTimeout(searchTimer);
+  searchResults.replaceChildren();
   const query = searchInput.value.trim();
   if (query.length < 3) { searchResults.innerHTML = ''; return; }
   searchTimer = window.setTimeout(async () => {
@@ -612,39 +665,44 @@ searchInput.addEventListener('input', () => {
     try {
       const response = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&addressdetails=1&q=${encodeURIComponent(query)}`);
       const results = await response.json();
+      if (version !== searchVersion) return;
       searchResults.innerHTML = results.map((result: any, index: number) => `<button type="button" data-result="${index}"><b>${escapeHtml(result.name || result.display_name.split(',')[0])}</b><span>${escapeHtml(result.display_name)}</span></button>`).join('') || '<span class="searching">No matching place found.</span>';
       searchResults.querySelectorAll<HTMLButtonElement>('[data-result]').forEach((button) => {
         button.onclick = () => {
           const result = results[Number(button.dataset.result)];
           const address = result.address || {};
           const locality = result.name || address.suburb || address.city || address.town || address.village;
-          locationDialog.close();
-          void landAt({ lat: Number(result.lat), lng: Number(result.lon), locality, city: address.city || address.town || locality, region: address.state || '', country: address.country || '', source: 'search' });
+          const city = address.city || address.town || address.village ||
+            (!requestedBoard || ['city', 'town', 'village'].includes(result.addresstype) ? locality : '');
+          void choosePickerPlace({ lat: Number(result.lat), lng: Number(result.lon), locality, city, region: address.state || '', country: address.country || '', source: 'search' });
         };
       });
-    } catch { searchResults.innerHTML = '<span class="searching">Search is unavailable. Try again.</span>'; }
+    } catch { if (version === searchVersion) searchResults.innerHTML = '<span class="searching">Search is unavailable. Try again.</span>'; }
   }, 350);
 });
 
 $('#precise-location').onclick = () => {
-  const button = $('#precise-location') as HTMLButtonElement;
-  if (!navigator.geolocation) { button.textContent = 'Location is unavailable in this browser'; return; }
-  button.textContent = 'Finding your precise area…';
+  const version = ++searchVersion;
+  const current = () => locationDialog.open && version === searchVersion;
+  const label = preciseLabel;
+  if (!navigator.geolocation) { label.textContent = 'Location is unavailable in this browser'; return; }
+  label.textContent = 'Finding your precise area…';
   navigator.geolocation.getCurrentPosition(async ({ coords }) => {
+    if (!current()) return;
     let locality = 'Your location', city = 'Your location', region = '', country = '';
     try {
       const response = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${coords.latitude}&lon=${coords.longitude}&zoom=14&addressdetails=1`);
       const result = await response.json();
       const address = result.address || {};
       locality = address.suburb || address.neighbourhood || address.city_district || address.city || locality;
-      city = address.city || address.town || address.village || locality;
+      city = address.city || address.town || address.village || (requestedBoard ? '' : locality);
       region = address.state || '';
       country = address.country || '';
     } catch { /* coordinates are still usable */ }
-    locationDialog.close();
-    button.textContent = 'Use my current location';
-    void landAt({ lat: coords.latitude, lng: coords.longitude, locality, city, region, country, source: 'device' });
-  }, () => { button.textContent = 'Could not access location — try search'; }, { enableHighAccuracy: false, timeout: 9000, maximumAge: 300000 });
+    if (!current()) return;
+    label.textContent = 'Use my current location';
+    void choosePickerPlace({ lat: coords.latitude, lng: coords.longitude, locality, city, region, country, source: 'device' });
+  }, () => { if (current()) label.textContent = 'Could not access location — try search'; }, { enableHighAccuracy: false, timeout: 9000, maximumAge: 300000 });
 };
 
 void start();

@@ -2,7 +2,6 @@
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
-import { roamPlayers } from './roam-players.js';
 
 interface Creds { appKey: string; secret: string; host: string }
 
@@ -42,6 +41,7 @@ export function nexconnApi(c: Creds) {
       const region = c.host.includes('.us-') ? 'NA' : c.host.includes('.sau-') ? 'SA' : 'SG';
       return send(200, {appKey:c.secret ? c.appKey : '', region});
     }
+    if (req.url === '/api/nexconn/roam') return send(410, {error:'Free Roam is paused.'});
     if (req.method !== 'POST') return send(405, {error:'POST required'});
     if (!c.appKey || !c.secret) return send(503, {error:'Nexconn credentials missing'});
     if (!req.headers['content-type']?.startsWith('application/json')) return send(415, {error:'JSON required'});
@@ -62,11 +62,6 @@ export function nexconnApi(c: Creds) {
         if (r.code !== 0 || !r.result?.accessToken) return send(502, {error:'Token issue failed (' + r.code + ')'});
         if (session.cookie) res.setHeader('Set-Cookie', session.cookie + (req.headers.origin?.startsWith('https://') ? '; Secure' : ''));
         return send(200, {token:r.result.accessToken});
-      }
-      if (req.url === '/api/nexconn/roam') {
-        if (session.cookie) return send(401, {error:'Connect to Nexconn to meet players.'});
-        const players = await roamPlayers(session.id, body);
-        return players ? send(200, {players}) : send(400, {error:'Choose a spot in Free Roam.'});
       }
       if (req.url === '/api/nexconn/room') {
         if (session.cookie) return send(401, {error:'Connect first'});

@@ -4,11 +4,11 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#0b1020" />
-    <meta name="description" content="A live map of what's happening around you. Create events, communities and live audio rooms anywhere, talk to neighbours and people around the world, ask an AI local guide, and roam your real streets." />
+    <meta name="description" content="A live map of what's happening around you. Create events, communities and live audio rooms anywhere, talk to neighbours and people around the world, ask an AI local guide, browse the city marketplace and pick the next play at local games." />
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="nearby" />
     <meta property="og:title" content="nearby — your world, live" />
-    <meta property="og:description" content="Create events and communities anywhere, talk to people nearby and around the world, ask an AI local guide, and roam your real streets." />
+    <meta property="og:description" content="Create events and communities anywhere, talk to people nearby and around the world, ask an AI local guide, browse the city marketplace and pick the next play at local games." />
     <meta property="og:url" content="https://nearby-world.vercel.app/" />
     <meta property="og:image" content="https://nearby-world.vercel.app/og.png" />
     <meta property="og:image:width" content="1200" />
@@ -50,7 +50,8 @@
         <button type="button" id="phone-activities" aria-expanded="false" aria-controls="activity-panel"><svg viewBox="0 0 24 24"><circle cx="5" cy="6" r="1"/><circle cx="5" cy="12" r="1"/><circle cx="5" cy="18" r="1"/><path d="M10 6h10M10 12h10M10 18h10"/></svg>Activities</button>
         <button type="button" data-map-action="#mobile-chat"><svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 1-8 8H7l-4 3 1-7a8 8 0 1 1 16-4Z"/></svg>Chat</button>
         <button type="button" data-map-action="#host-start"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v8m-4-4h8"/></svg>Create</button>
-        <button type="button" data-map-action="#enter-roam"><svg viewBox="0 0 24 24"><path d="m4 17 2-7 2-4h8l2 4 2 7v2h-3v-2H7v2H4zM6 11h12m-10 3h1m6 0h1"/></svg>Free Roam</button>
+        <button type="button" data-city-market><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10h16l-2-6H6l-2 6Zm1 1v9h14v-9M9 20v-6h5v6"/></svg>Market</button>
+        <button type="button" data-city-games><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m12 8 4 3-2 5h-4l-2-5z"/></svg>Games</button>
       </nav>
       <nav id="phone-options" popover aria-label="Map options">
         <button type="button" data-map-action="#map-home">Show all activities</button>
@@ -71,10 +72,10 @@
       </section>
 
       <aside class="nearby panel hidden" id="activity-panel" aria-label="Happening nearby">
-        <button id="enter-roam" type="button">
-          <span class="roam-tag">3D HANGOUT</span>
-          <strong>Free Roam</strong><span class="roam-arrow" aria-hidden="true">↗</span>
-        </button>
+        <nav class="city-shortcuts" aria-label="In your city">
+          <button type="button" data-city-market><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10h16l-2-6H6l-2 6Zm1 1v9h14v-9M9 20v-6h5v6"/></svg>Marketplace</button>
+          <button type="button" data-city-games><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m12 8 4 3-2 5h-4l-2-5z"/></svg>Live games</button>
+        </nav>
         <header class="nearby-head">
           <div class="index-heading"><h2>Activities</h2><span class="index-count mono" id="activity-count">0</span><button type="button" id="host-start" title="Create a chat room, event or audio session on the map">+ Create</button></div>
           <p id="activity-caption">Finding Luma events…</p>
@@ -130,17 +131,11 @@
           </div>
           <div class="event-actions"><a id="luma-link" target="_blank" rel="noopener noreferrer" hidden>View on Luma ↗</a><button id="rsvp" type="button" aria-pressed="false">RSVP</button>
           <button class="event-chat" id="join-conversation" type="button">Event chat <span aria-hidden="true">↗</span></button></div>
+          <button id="event-predictions" type="button" data-city-games hidden>Game predictions</button>
           <small id="event-status" role="status"></small>
         </div>
       </section>
 
-      <section id="roam-controls" aria-label="Free Roam controls" hidden>
-        <button id="leave-roam" type="button">← Area map</button>
-        <div class="roam-pad" role="group" aria-label="Move through the neighborhood">
-          <button data-step="left" aria-label="Turn left">↶</button><button data-step="forward" aria-label="Move forward">↑</button><button data-step="back" aria-label="Move backward">↓</button><button data-step="right" aria-label="Turn right">↷</button>
-        </div>
-        <small>W / S to move · A / D to turn</small>
-      </section>
       <div class="hud mono hidden" id="hud">
         <div class="district"><span class="district-meta">Current area</span><h1 id="locality-title">Your area</h1><span id="hud-coords"></span></div>
       </div>
@@ -175,24 +170,24 @@
       </form>
     </dialog>
 
-    <dialog class="location-dialog" id="location-dialog">
-      <form method="dialog" class="dialog-card">
-        <button class="round-button ghost dialog-close" value="cancel" aria-label="Close">
+    <dialog class="location-dialog" id="location-dialog" aria-labelledby="location-title">
+      <div class="dialog-card">
+        <button class="round-button ghost dialog-close" type="button" aria-label="Close">
           <svg viewBox="0 0 24 24"><path d="M7 7l10 10M17 7 7 17"/></svg>
         </button>
         <span class="mono kicker">Change area</span>
-        <h2>Where should we land?</h2>
+        <h2 id="location-title">Where should we land?</h2>
         <p>Your network gives a rough guess. Search for a place, or use your device for a closer match.</p>
         <label class="search-field">
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg>
-          <input id="location-search" placeholder="Search a city or neighbourhood" autocomplete="off" aria-label="Search a city or neighbourhood" />
+          <input id="location-search" autofocus placeholder="Search a city or neighbourhood" autocomplete="off" aria-label="Search a city or neighbourhood" />
         </label>
-        <div class="search-results" id="search-results"></div>
+        <div class="search-results" id="search-results" aria-live="polite"></div>
         <button class="secondary-button" id="precise-location" type="button">
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="8"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22"/></svg>
-          <span>Use my current location</span>
+          <span aria-live="polite">Use my current location</span>
         </button>
-      </form>
+      </div>
     </dialog>
 
     <a class="earth-credit" href="https://science.nasa.gov/resource/earth-with-clouds-3d-model/">Earth model · NASA / VTAD</a>

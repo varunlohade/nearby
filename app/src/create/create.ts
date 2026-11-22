@@ -70,17 +70,27 @@ export function mountCreate(options: CreateOptions) {
   audioPanel.setAttribute('aria-label', 'Live audio session');
   document.querySelector('#app')!.append(audioPanel);
 
-  function start() {
+  let createTrigger: HTMLElement | undefined;
+  const centerButton = bar.querySelector<HTMLButtonElement>('[data-act=center]')!;
+  function start(trigger: HTMLElement) {
+    createTrigger = trigger;
     closePopup();
     document.body.classList.add('creating');
     bar.hidden = false;
+    centerButton.focus();
   }
   function stop() {
     document.body.classList.remove('creating');
     bar.hidden = true;
   }
-  bar.querySelector<HTMLButtonElement>('[data-act=center]')!.onclick = () => menu(options.map().getCenter().wrap());
-  bar.querySelector<HTMLButtonElement>('[data-act=cancel]')!.onclick = stop;
+  centerButton.onclick = () => menu(options.map().getCenter().wrap());
+  function dismiss() {
+    stop();
+    closePopup();
+    createTrigger?.focus();
+    createTrigger = undefined;
+  }
+  bar.querySelector<HTMLButtonElement>('[data-act=cancel]')!.onclick = dismiss;
 
   const map = options.map();
   map.on('click', event => {
@@ -120,7 +130,8 @@ export function mountCreate(options: CreateOptions) {
     options.map().easeTo({ center: at, offset: [compact ? 0 : 120, compact ? 60 : 140], duration: instant() ? 0 : 400 });
   }
 
-  function menu(at: maplibregl.LngLat) {
+  function menu(at: maplibregl.LngLat, previousKind?: Created['kind']) {
+    if (bar.hidden && !previousKind) createTrigger = map.getCanvas();
     stop();
     const card = document.createElement('div');
     card.className = 'create-card';
@@ -135,7 +146,7 @@ export function mountCreate(options: CreateOptions) {
     void fetch(`/api/places/where?lat=${at.lat}&lng=${at.lng}`).then(r => r.json()).then(d => {
       where = d.place || ''; const p = card.querySelector('.create-where'); if (p) p.textContent = where ? '⌖ ' + where : '';
     }).catch(() => { const p = card.querySelector('.create-where'); if (p) p.textContent = ''; });
-    card.querySelector<HTMLButtonElement>('.create-x')!.onclick = closePopup;
+    card.querySelector<HTMLButtonElement>('.create-x')!.onclick = dismiss;
     card.querySelectorAll<HTMLButtonElement>('[data-kind]').forEach(b => { b.onclick = () => form(b.dataset.kind as Created['kind'], at, () => where); });
     // Communities live in src/community/community.ts; hand the spot over.
     card.querySelector<HTMLButtonElement>('[data-community]')!.onclick = () => {
@@ -143,6 +154,7 @@ export function mountCreate(options: CreateOptions) {
       document.dispatchEvent(new CustomEvent('nearby:create-community', { detail: { lat: at.lat, lng: at.lng, where } }));
     };
     show(at, card, 'create-popup');
+    card.querySelector<HTMLButtonElement>(previousKind ? `[data-kind=${previousKind}]` : '[data-community]')!.focus({ preventScroll: true });
     const pin = document.createElement('div');
     pin.className = 'create-spot';
     const spot = new maplibregl.Marker({ element: pin, anchor: 'bottom' }).setLngLat(at).addTo(options.map());
@@ -167,8 +179,8 @@ export function mountCreate(options: CreateOptions) {
       <p class="create-where">${esc(where() ? '⌖ ' + where() : '')}</p>
       <div class="create-actions"><button type="button" class="create-back">Back</button><button type="submit">${kind === 'room' ? 'Create room' : kind === 'event' ? 'Publish event' : 'Go live'}</button></div>
       <small class="create-status" role="status"></small>`;
-    card.querySelector<HTMLButtonElement>('.create-x')!.onclick = closePopup;
-    card.querySelector<HTMLButtonElement>('.create-back')!.onclick = () => menu(at);
+    card.querySelector<HTMLButtonElement>('.create-x')!.onclick = dismiss;
+    card.querySelector<HTMLButtonElement>('.create-back')!.onclick = () => menu(at, kind);
     card.onsubmit = async event => {
       event.preventDefault();
       const data = new FormData(card);
@@ -196,7 +208,9 @@ export function mountCreate(options: CreateOptions) {
       }
     };
     show(at, card, 'create-popup');
-    requestAnimationFrame(() => card.querySelector<HTMLInputElement>('input[name=title]')?.select());
+    const title = card.querySelector<HTMLInputElement>('input[name=title]')!;
+    title.focus({ preventScroll: true });
+    title.select();
   }
 
   // ------------------------------------------------------------ pins and cards
@@ -205,13 +219,13 @@ export function mountCreate(options: CreateOptions) {
     el.type = 'button';
     el.className = `drop kind-${item.kind}`;
     el.dataset.created = item.id;
-    el.setAttribute('aria-label', `${KINDS[item.kind].label}: ${item.title}`);
     el.onclick = event => { event.stopPropagation(); open(item.id); };
     return el;
   }
   function paint(item: Created) {
     const el = markers.get(item.id)?.getElement();
     if (!el) return;
+    el.setAttribute('aria-label', `${KINDS[item.kind].label}: ${item.title}`);
     const badge = item.kind === 'audio' ? `<em>${item.live ? item.live + ' live' : 'Live'}</em>` : item.kind === 'event' && item.start ? `<em>${new Date(item.start).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</em>` : '';
     el.innerHTML = `<span class="drop-face">${KINDS[item.kind].icon}</span>${item.id.startsWith('p') ? '<em>Private</em>' : badge}<span class="drop-name">${esc(item.title)}</span>`;
     el.classList.toggle('is-live', item.kind === 'audio' && !!item.live);
@@ -225,6 +239,7 @@ export function mountCreate(options: CreateOptions) {
   function open(id: string, fresh = false) {
     const item = items.get(id);
     if (!item) return;
+    if (!fresh) createTrigger = markers.get(id)?.getElement();
     const at = new maplibregl.LngLat(item.lng, item.lat);
     document.querySelectorAll('.drop.is-active').forEach(n => n.classList.remove('is-active'));
     markers.get(id)?.getElement().classList.add('is-active');
@@ -242,10 +257,11 @@ export function mountCreate(options: CreateOptions) {
       <div class="create-actions">
         ${item.kind === 'audio' ? `<button type="button" data-act="join">${audioItem?.id === item.id ? 'You are in' : 'Join audio'}</button>` : ''}
         <button type="button" data-act="chat" class="${item.kind === 'audio' ? 'quiet' : ''}">${item.kind === 'room' ? 'Open chat room' : item.kind === 'event' ? 'Event chat' : 'Text chat'}</button>
+        ${item.kind === 'event' && item.category === 'sport' ? `<button type="button" data-city-games data-game-title="${esc(item.title)}" data-game-venue="${esc(item.place)}">Predictions</button>` : ''}
         <button type="button" data-act="share" class="quiet" title="Copy a link to this spot">Share</button>
       </div>
       <small class="create-status" role="status"></small>`;
-    card.querySelector<HTMLButtonElement>('.create-x')!.onclick = () => { closePopup(); markers.get(id)?.getElement().classList.remove('is-active'); };
+    card.querySelector<HTMLButtonElement>('.create-x')!.onclick = () => { dismiss(); markers.get(id)?.getElement().classList.remove('is-active'); };
     card.querySelector<HTMLButtonElement>('[data-act=chat]')!.onclick = () => { closePopup(); options.openChat(item.id, item.title, KINDS[item.kind].label); };
     card.querySelector<HTMLButtonElement>('[data-act=join]')?.addEventListener('click', () => { closePopup(); void joinAudio(item); });
     card.querySelector<HTMLButtonElement>('[data-act=share]')!.onclick = async () => {
@@ -254,6 +270,7 @@ export function mountCreate(options: CreateOptions) {
       catch { card.querySelector('.create-status')!.textContent = link; }
     };
     show(at, card, 'create-popup');
+    if (fresh && item.kind === 'event') card.querySelector<HTMLButtonElement>('.create-x')!.focus({ preventScroll: true });
     if (fresh) {
       if (item.kind === 'room') { closePopup(); options.openChat(item.id, item.title, KINDS.room.label); }
       if (item.kind === 'audio') { closePopup(); void joinAudio(item); }
@@ -358,15 +375,17 @@ export function mountCreate(options: CreateOptions) {
     const place = options.place();
     if (document.body.classList.contains('on-map') && place !== lastPlace) { lastPlace = place; closePopup(); scheduleFetch(0); }
   }).observe(document.body, { attributes: true, attributeFilter: ['class'] });
-  addEventListener('keydown', event => {
-    if (event.key !== 'Escape') return;
-    if (document.body.classList.contains('creating')) stop();
-    else if (popup) closePopup();
+  document.addEventListener('keydown', event => {
+    if (event.key !== 'Escape' || event.defaultPrevented || document.querySelector('dialog:modal, :popover-open')) return;
+    if (bar.hidden && !popup) return;
+    event.preventDefault();
+    event.stopPropagation();
+    dismiss();
   });
   addEventListener('pagehide', () => audio?.leave());
 
-  document.querySelector<HTMLButtonElement>('#create-mode')?.addEventListener('click', () => {
-    if (document.body.classList.contains('creating')) stop(); else start();
+  document.querySelector<HTMLButtonElement>('#create-mode')?.addEventListener('click', event => {
+    if (document.body.classList.contains('creating')) dismiss(); else start(event.currentTarget as HTMLButtonElement);
   });
 
   return {

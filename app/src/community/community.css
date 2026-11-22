@@ -79,7 +79,7 @@
 .cm-req-more:empty { display: none; }
 .cm-req-more { margin-top: 8px; }
 .cm-help { display: grid; gap: 6px; }
-.cm-help label span, .cm-form label span, .cm-ask label span, .cm-agents-card label span { display: block; margin-bottom: 4px; color: #b9b9af; font: 500 11px Geist, sans-serif; }
+.cm-help label span, .cm-form > label > span, .cm-ask label span, .cm-agents-card label span { display: block; margin-bottom: 4px; color: #b9b9af; font: 500 11px Geist, sans-serif; }
 .cm-help small, .cm-ask small { color: #8d8c84; }
 .cm-sent { color: #9fe9d6 !important; font-size: 12px !important; }
 .cm-contact { margin-top: 6px !important; padding: 5px 8px; border-radius: 2px; background: color-mix(in srgb, var(--cm, var(--accent)) 18%, transparent); color: #fff5df !important; font: 600 13px "Geist Mono", monospace !important; }

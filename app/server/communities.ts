@@ -209,7 +209,7 @@ export const publicCommunity = (c: Community) => ({ ...c, by: publicAuthor(c.by)
 export const publicPost = (p: Post) => ({ ...p, by: publicAuthor(p.by) });
 
 // ---------------------------------------------------------------- HTTP routes for people
-async function readJson(req: IncomingMessage, limit = 8000): Promise<Record<string, unknown>> {
+export async function readJson(req: IncomingMessage, limit = 8000): Promise<Record<string, unknown>> {
   let raw = '';
   for await (const chunk of req) { raw += chunk; if (raw.length > limit) throw new Error('Request too large'); }
   return raw ? JSON.parse(raw) : {};

@@ -180,7 +180,7 @@
   .nearby-head {flex:none;}
   .activity-list {min-height:0;overflow-y:auto;}
 }
-#host-dialog,#name-dialog {max-height:90dvh;overflow:auto;}
+#host-dialog .dialog-card, #name-dialog .dialog-card { max-height: 90dvh; overflow: auto; }
 .orbit-explore #world {cursor:grab;touch-action:none;}
 .orbit-explore #world:active {cursor:grabbing;}
 .orbit-explore #arrival {pointer-events:none;}

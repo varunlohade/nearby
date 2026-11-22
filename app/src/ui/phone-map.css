@@ -10,7 +10,7 @@
   .on-map .ask-bar { border-radius: 12px; border-left-width: 1px; }
   .on-map #search-map-area { top: 125px; }
   .on-map:not(.roam-open,.cm-open,.ask-open,.chat-open,.waypoint-open,.creating,.create-open,.picking) .phone-dock {
-    display: grid; grid-template-columns: repeat(4,1fr); gap: 2px;
+    display: grid; grid-template-columns: repeat(5,1fr); gap: 2px;
     position: absolute; z-index: 6; left: 12px; right: 12px; bottom: max(20px,env(safe-area-inset-bottom));
     padding: 5px; border: 1px solid #ffffff38; border-radius: 18px; background: var(--panel); box-shadow: 0 6px 20px #0005;
   }
@@ -26,4 +26,18 @@
   #phone-options button:hover { background: var(--surface-raised); }
   .phone-zoom { display: flex; border-block: 1px solid #ffffff22; }
   .phone-zoom button { flex: 1; }
+  .phone-event-sheet {
+    position: absolute;
+    inset-inline: max(12px, env(safe-area-inset-left)) max(12px, env(safe-area-inset-right));
+    bottom: max(16px, env(safe-area-inset-bottom));
+    max-width: 390px;
+    margin-inline: auto;
+  }
+  .phone-event-sheet .event {
+    width: 100%;
+    max-height: calc(100dvh - max(78px, env(safe-area-inset-top)) - max(16px, env(safe-area-inset-bottom)));
+    overflow-wrap: anywhere;
+  }
+  .phone-event-sheet #sheet-close, #chat-close { width: 44px; height: 44px; min-width: 44px; min-height: 44px; }
+  .phone-event-sheet .event-actions > * { min-height: 44px; }
 }

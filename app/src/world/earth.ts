@@ -29,8 +29,8 @@ export interface Activity {
 
 /** The street map's palette (see world/atlas.ts and atlas-hud.css). The globe uses it too. */
 const ATLAS = {
-  space: '#0b0d0d', land: '#252729', green: '#33433a', dry: '#3a3833', ice: '#55585a',
-  water: '#203f4c', deep: '#182f39', coast: '#d4d1c4', border: '#959793',
+  space: '#dcebf8', land: '#c3cc9a', green: '#73a790', dry: '#dfbd99', ice: '#e8edf0',
+  water: '#659ec6', deep: '#5086b9', coast: '#e9eee6', border: '#777e8a',
   lights: '#f5bd52', rim: '#e8dcc1', glow: '#d9c7a3', cloud: '#cfcec4',
 } as const;
 

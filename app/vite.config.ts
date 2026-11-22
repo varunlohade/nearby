@@ -1,3 +1,4 @@
+import { cityApi } from './server/city';
 import { askApi } from './server/ask';
 import { placesApi } from './server/places';
 import { lumaApi } from './server/luma';
@@ -25,8 +26,8 @@ export default defineConfig(({ mode }) => {
     plugins: [
       {
         name: 'nexconn-api',
-        configureServer(server) { for (const m of [api, lumaApi, ask, places, communities, agents]) server.middlewares.use(m); },
-        configurePreviewServer(server) { for (const m of [api, lumaApi, ask, places, communities, agents]) server.middlewares.use(m); },
+        configureServer(server) { for (const m of [cityApi, api, lumaApi, ask, places, communities, agents]) server.middlewares.use(m); },
+        configurePreviewServer(server) { for (const m of [cityApi, api, lumaApi, ask, places, communities, agents]) server.middlewares.use(m); },
       },
     ],
   };

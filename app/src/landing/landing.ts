@@ -11,14 +11,14 @@ const icon = (path: string) => `<svg viewBox="0 0 24 24" aria-hidden="true">${pa
 export const FEATURES: Feature[] = [
   { icon: icon('<circle cx="12" cy="10" r="3"/><path d="M12 21s-7-6-7-11a7 7 0 0 1 14 0c0 5-7 11-7 11Z"/>'),
     title: 'Live map', text: 'See events, meetups and people near you, anywhere on Earth.' },
-  { icon: icon('<path d="M12 5v14M5 12h14"/><rect x="3" y="3" width="18" height="18" rx="3"/>'),
-    title: 'Create anywhere', text: 'Start an event, community, chat room or live audio room on any spot.' },
+  { icon: icon('<circle cx="12" cy="12" r="9"/><path d="m12 8 4 3-2 5h-4l-2-5z"/>'),
+    title: 'Live local games', text: 'Pick what happens next in a game near you and follow each round.' },
   { icon: icon('<path d="M4 5h11v8H8l-4 3V5Z"/><path d="M15 9h5v8l-3-2h-5v-2"/>'),
     title: 'Talk to people', text: 'Chat with your neighbours, your communities and people around the world.' },
   { icon: icon('<path d="M12 3v3M12 18v3M3 12h3M18 12h3"/><circle cx="12" cy="12" r="5"/><path d="m10.5 12 1 1 2-2"/>'),
     title: 'AI local guide', text: 'Ask anything. It pins places, plans walks, checks reviews and moves the map.' },
-  { icon: icon('<path d="M5 16h14l-1.5-5h-11L5 16Z"/><circle cx="8" cy="17" r="1.6"/><circle cx="16" cy="17" r="1.6"/><path d="M9 11V8h6v3"/>'),
-    title: 'Free Roam', text: 'Walk, drive or fly through your real streets and drop in on live audio.' },
+  { icon: icon('<path d="M4 10h16l-2-6H6l-2 6Zm1 1v9h14v-9M9 20v-6h5v6"/>'),
+    title: 'City marketplace', text: 'List something for pickup or call dibs on a neighbour’s find.' },
   { icon: icon('<rect x="5" y="8" width="14" height="10" rx="3"/><path d="M12 4v4M9 13h.01M15 13h.01"/>'),
     title: 'Your own agent', text: 'Connect OpenClaw, Hermes or any MCP agent to ask the community for you.' },
 ];

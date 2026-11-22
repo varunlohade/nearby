@@ -10,6 +10,7 @@ import IORedis from 'ioredis';
 
 export interface Store {
   readonly shared: boolean;
+  compareRevision(key: string, field: string, expected: number, value: { revision: number }, before?: number): Promise<boolean>;
   get<T>(key: string): Promise<T | null>;
   set(key: string, value: unknown, ttlSeconds?: number): Promise<void>;
   del(...keys: string[]): Promise<void>;
@@ -29,9 +30,25 @@ export interface Store {
   hlen(key: string): Promise<number>;
 }
 
+// Compare the stored revision and write in one Redis operation across instances.
+const compareRevisionScript = `
+local raw = redis.call('HGET', KEYS[1], ARGV[1])
+local revision = raw and cjson.decode(raw).revision or 0
+if revision ~= tonumber(ARGV[2]) then return 0 end
+local deadline = tonumber(ARGV[4])
+if deadline > 0 then
+  local now = redis.call('TIME')
+  if now[1] * 1000 + math.floor(now[2] / 1000) >= deadline then return 0 end
+end
+redis.call('HSET', KEYS[1], ARGV[1], ARGV[3])
+return 1`;
+
 function redisStore(redis: Redis): Store {
   return {
     shared: true,
+    async compareRevision(key, field, expected, value, before) {
+      return Number(await redis.eval(compareRevisionScript, [key], [field, expected, JSON.stringify(value), before ?? 0])) === 1;
+    },
     async get<T>(key: string) { return (await redis.get<T>(key)) ?? null; },
     async set(key, value, ttl) { if (ttl) await redis.set(key, value, { ex: ttl }); else await redis.set(key, value); },
     async del(...keys) { if (keys.length) await redis.del(...keys); },
@@ -63,6 +80,9 @@ function tcpStore(redis: IORedis): Store {
   const dec = <T>(raw: string | null): T | null => { if (raw == null) return null; try { return JSON.parse(raw) as T; } catch { return raw as T; } };
   return {
     shared: true,
+    async compareRevision(key, field, expected, value, before) {
+      return Number(await redis.eval(compareRevisionScript, 1, key, field, expected, JSON.stringify(value), before ?? 0)) === 1;
+    },
     async get<T>(key: string) { return dec<T>(await redis.get(key)); },
     async set(key, value, ttl) { if (ttl) await redis.set(key, enc(value), 'EX', ttl); else await redis.set(key, enc(value)); },
     async del(...keys) { if (keys.length) await redis.del(...keys); },
@@ -101,6 +121,15 @@ function memoryStore(): Store {
   const put = (key: string, value: unknown, ttl?: number) => values.set(key, { value, until: ttl ? Date.now() + ttl * 1000 : 0 });
   return {
     shared: false,
+    async compareRevision(key, field, expected, value, before) {
+      if (before !== undefined && Date.now() >= before) return false;
+      const hit = live(key);
+      const hash = (hit?.value ?? {}) as Record<string, { revision: number }>;
+      if ((hash[field]?.revision ?? 0) !== expected) return false;
+      hash[field] = structuredClone(value);
+      values.set(key, { value: hash, until: hit?.until ?? 0 });
+      return true;
+    },
     async get<T>(key: string) { return (live(key)?.value as T) ?? null; },
     async set(key, value, ttl) { put(key, structuredClone(value), ttl); },
     async del(...keys) { keys.forEach(k => values.delete(k)); },

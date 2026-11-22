@@ -1,3 +1,4 @@
+import { cityApi } from '../server/city.js';
 // Vercel Function: every /api/* request lands here (see vercel.json) and runs
 // through the same route handlers the Vite dev server uses.
 import type { IncomingMessage, ServerResponse } from 'node:http';
@@ -17,7 +18,7 @@ configureIdentity(env.IDENTITY_SECRET || env.NEXCONN_APP_SECRET || '');
 configureGuard(env.ANTHROPIC_API_KEY ?? '');
 const handlers: Handler[] = [
   nexconnApi({ appKey: env.NEXCONN_APP_KEY ?? '', secret: env.NEXCONN_APP_SECRET ?? '', host: env.NEXCONN_API_HOST || 'api.sg-light-api.com' }),
-  lumaApi,
+  cityApi, lumaApi,
   askApi(env.ANTHROPIC_API_KEY ?? '', { id: env.REDDIT_CLIENT_ID, secret: env.REDDIT_CLIENT_SECRET }),
   placesApi(env.TURN_URLS, env.TURN_SHARED_SECRET),
   communitiesApi(),

@@ -1,0 +1,62 @@
+/* Map side panel — trail-guide look shared with the city marketplace:
+   white card, forest ink, lime pill actions, soft grey hover rows. */
+#activity-panel {
+  --tp-ink: #1c2b1e;
+  --tp-muted: #5c6a5e;
+  --tp-line: #e1e5de;
+  --tp-soft: #f3f5f0;
+  --tp-soft-hover: #e8ece4;
+  --tp-lime: #a6eb86;
+  --tp-lime-hover: #93df70;
+  --tp-lime-ink: #132812;
+  --tp-active: #e7f5dd;
+  border: 1px solid var(--tp-line);
+  border-radius: 20px;
+  background: #fff;
+  color: var(--tp-ink);
+  box-shadow: 0 1px 2px #1c2b1e0f, 0 12px 32px -10px #1c2b1e33;
+}
+#activity-panel :is(button, input):focus-visible { outline: 2px solid var(--tp-ink); outline-offset: 2px; }
+
+/* City shortcuts read as outlined category chips. */
+#activity-panel .city-shortcuts { gap: 8px; padding: 14px 14px 2px; }
+#activity-panel .city-shortcuts button {
+  min-height: 44px; border: 1px solid var(--tp-line); border-radius: 14px; background: #fff; color: var(--tp-ink);
+  font: 600 13px/1.2 var(--sans); filter: none; transition: border-color .15s ease-out, background-color .15s ease-out, transform .16s ease-out;
+}
+#activity-panel .city-shortcuts button[data-city-games] { border-color: var(--tp-line); background: #fff; color: var(--tp-ink); }
+#activity-panel .city-shortcuts button:hover { border-color: var(--tp-ink); background: #fff; filter: none; }
+#activity-panel .city-shortcuts button:active { transform: scale(.97); }
+
+/* Headings and counts. */
+#activity-panel :is(.index-heading h2, .cm-head h3) { color: var(--tp-ink); font: 650 19px/1.2 var(--sans); letter-spacing: -.025em; }
+#activity-panel :is(.index-count, .cm-count) { padding: 0 7px; border: 0; border-radius: 999px; background: var(--tp-soft); color: var(--tp-muted); font: 600 11px/20px var(--sans); }
+#activity-panel .nearby-head p, #activity-panel :is(.activity-copy, .cm-copy) small, #activity-panel .cm-more, #activity-panel .cm-empty { color: var(--tp-muted); }
+
+/* Actions: lime pill for create, grey pill for the rest. */
+#activity-panel :is(#host-start, .cm-head button, .cm-empty button) {
+  min-height: 32px; padding: 5px 11px; border: 0; border-radius: 999px; background: var(--tp-soft); color: var(--tp-ink); white-space: nowrap;
+  font: 600 12px/1.2 var(--sans); transition: background-color .15s ease-out, transform .16s ease-out;
+}
+#activity-panel :is(#host-start, .cm-head .cm-new) { background: var(--tp-lime); color: var(--tp-lime-ink); }
+#activity-panel :is(#host-start, .cm-head .cm-new):hover { background: var(--tp-lime-hover); color: var(--tp-lime-ink); }
+#activity-panel :is(.cm-head .cm-agents-open, .cm-empty button):hover { background: var(--tp-soft-hover); color: var(--tp-ink); }
+#activity-panel :is(#host-start, .cm-head button, .cm-empty button):active { transform: scale(.97); }
+
+/* Rows: rounded tiles, grey hover, lime tint when selected. */
+#activity-panel .activity-list { padding: 2px 8px 8px; gap: 2px; background: #fff; }
+#activity-panel :is(.activity-item, .cm-row) { border-radius: 14px; color: var(--tp-ink); transition: background-color .15s ease-out; }
+#activity-panel .activity-item { padding: 9px 10px; grid-template-columns: 40px minmax(0,1fr); gap: 12px; }
+#activity-panel :is(.activity-item, .cm-row):hover, #activity-panel .activity-item.is-hot { background: var(--tp-soft); color: var(--tp-ink); }
+#activity-panel .activity-item.is-active { background: var(--tp-active); color: var(--tp-ink); }
+#activity-panel .activity-item.is-active::before { display: none; }
+#activity-panel .activity-copy b, #activity-panel .cm-copy b { color: var(--tp-ink); font-weight: 600; }
+#activity-panel .kind-icon { width: 40px; height: 40px; border-radius: 12px; background: color-mix(in srgb, var(--type) 34%, white); }
+#activity-panel .cm-section { border-color: var(--tp-line); }
+#activity-panel .cm-toggle input { accent-color: var(--tp-ink); }
+
+@media (prefers-reduced-motion: reduce) {
+  #activity-panel :is(button, .activity-item, .cm-row) { transition: none; }
+  #activity-panel :is(.city-shortcuts button, #host-start, .cm-head button, .cm-empty button):active { transform: none; }
+}
+#activity-panel :is(.nearby-head, .cm-section, .city-shortcuts, .activity-list) { background: #fff; }

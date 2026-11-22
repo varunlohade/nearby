@@ -57,6 +57,7 @@ export class StreetAtlas {
   private waypoint?: maplibregl.Marker;
   private picking = false;
   private preview?: maplibregl.Popup;
+  private phoneSheet?: HTMLElement;
   private selected?: { id: string; card: HTMLElement };
 
   private get instant() {
@@ -86,7 +87,8 @@ export class StreetAtlas {
     document.querySelector<HTMLButtonElement>('#pin-center')!.onclick = () => this.placeWaypoint(this.map.getCenter());
     document.querySelector<HTMLButtonElement>('#pin-clear')!.onclick = () => this.clearWaypoint();
     this.map.on('resize', () => {
-      if (this.selected) this.focus(this.selected.id, this.selected.card, false);
+      if (!this.selected || (this.phoneSheet && matchMedia('(max-width: 720px)').matches)) return;
+      this.focus(this.selected.id, this.selected.card, false);
     });
     this.map.on('error', () => {
       if (!this.map.areTilesLoaded()) container.classList.add('tiles-pending');
@@ -117,14 +119,16 @@ export class StreetAtlas {
     this.updateSearchButton();
     const player = document.createElement('div');
     player.className = 'player-position';
-    player.setAttribute('aria-label', 'Your selected area');
     player.innerHTML = '<i></i><span>Area center</span>';
     this.pins = [new maplibregl.Marker({element: player}).setLngLat(this.origin).addTo(this.map)];
+    player.setAttribute('aria-label', 'Your selected area');
     for (const event of activities) {
       const at: [number, number] = event.venuePoint ?? [place.lng + event.x / (111.32 * Math.cos(place.lat * Math.PI / 180)), place.lat - event.z / 111.32];
       this.positions.set(event.id, at);
       this.bounds.extend(at);
-      this.pins.push(new maplibregl.Marker({element: makePin(event), anchor:'bottom'}).setLngLat(at).addTo(this.map));
+      const marker = new maplibregl.Marker({element: makePin(event), anchor:'bottom'}).setLngLat(at).addTo(this.map);
+      marker.getElement().setAttribute('aria-label', event.title);
+      this.pins.push(marker);
     }
     if (!landing) return;
     // Match the final orbital image scale at this latitude in Web Mercator.
@@ -194,6 +198,17 @@ export class StreetAtlas {
     if (!center) return;
     this.closePreview();
     this.selected = {id, card};
+    if (matchMedia('(max-width: 720px)').matches) {
+      // Keep touch controls outside the moving map canvas and its gesture handlers.
+      this.phoneSheet = document.createElement('div');
+      this.phoneSheet.className = 'activity-popup phone-event-sheet';
+      this.phoneSheet.append(card);
+      document.querySelector('#app')!.append(this.phoneSheet);
+      const pinY = Math.max(60, (this.map.getContainer().clientHeight - this.phoneSheet.offsetHeight) / 2);
+      this.map.easeTo({center, zoom: Math.max(this.map.getZoom(), 15),
+        offset: [0, pinY - this.map.getContainer().clientHeight / 2], duration: animate && !this.instant ? 450 : 0});
+      return;
+    }
     const compact = innerWidth <= 900;
     const anchor = compact ? 'top' : 'left';
     this.preview = new maplibregl.Popup({anchor, offset: compact ? [0, 4] : [27, -25],
@@ -208,6 +223,8 @@ export class StreetAtlas {
 
   closePreview() {
     this.selected = undefined;
+    this.phoneSheet?.remove();
+    this.phoneSheet = undefined;
     this.preview?.remove();
     this.preview = undefined;
   }
