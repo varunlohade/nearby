@@ -1,0 +1,29 @@
+.phone-dock, #phone-more { display: none; }
+#phone-options:not(:popover-open) { display: none; }
+@media (max-width: 720px) {
+  .on-map #phone-more { display: grid; place-items: center; width: 44px; height: 44px; letter-spacing: 2px; }
+  .on-map .top-actions > :not(#phone-more), .on-map #hud, .on-map .map-tools,
+  .on-map #mobile-chat, .on-map #activity-panel:not(.phone-open) { display: none; }
+  .on-map .place-chip { max-width: 50vw; height: 44px; }
+  .on-map #app > .ask { top: 66px; }
+  .ask:not(:focus-within) .ask-chips { display: none; }
+  .on-map .ask-bar { border-radius: 12px; border-left-width: 1px; }
+  .on-map #search-map-area { top: 125px; }
+  .on-map:not(.roam-open,.cm-open,.ask-open,.chat-open,.waypoint-open,.creating,.create-open,.picking) .phone-dock {
+    display: grid; grid-template-columns: repeat(4,1fr); gap: 2px;
+    position: absolute; z-index: 6; left: 12px; right: 12px; bottom: max(20px,env(safe-area-inset-bottom));
+    padding: 5px; border: 1px solid #ffffff38; border-radius: 18px; background: #191c20fa; box-shadow: 0 6px 20px #0005;
+  }
+  .phone-dock button { display: grid; justify-items: center; align-content: center; gap: 4px; min-height: 50px; background: none; color: #eeeae1; border: 0; border-radius: 12px; font: 600 11px Geist,sans-serif; }
+  .phone-dock svg { width: 21px; height: 21px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+  .phone-dock [aria-expanded=true] { background: #353a3c; }
+  .phone-dock [data-map-action="#enter-roam"] { color: #ffd29b; }
+  .on-map #activity-panel.phone-open { bottom: calc(max(20px,env(safe-area-inset-bottom)) + 70px); max-height: 58dvh; overflow-y: auto; }
+  #activity-panel.phone-open :is(#enter-roam,#host-start) { display: none; }
+  #activity-panel.phone-open .activity-list { display: grid; overflow: visible; }
+  #phone-options:popover-open { position: fixed; inset: 62px 12px auto auto; margin: 0; display: grid; padding: 6px; width: 205px; background: #191c20; color: #eeeae1; border: 1px solid #ffffff38; border-radius: 14px; box-shadow: 0 8px 26px #0007; }
+  #phone-options button { min-height: 44px; background: transparent; border: 0; border-radius: 8px; padding: 8px 12px; color: inherit; text-align: left; font: 500 14px Geist,sans-serif; }
+  #phone-options button:hover { background: #34373a; }
+  .phone-zoom { display: flex; border-block: 1px solid #ffffff22; }
+  .phone-zoom button { flex: 1; }
+}

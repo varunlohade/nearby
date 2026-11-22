@@ -15,7 +15,7 @@ export interface Store {
   del(...keys: string[]): Promise<void>;
   /** Increment a counter; the first increment starts its time window. */
   incrWindow(key: string, windowSeconds: number): Promise<number>;
-  hset(key: string, field: string, value: unknown): Promise<void>;
+  hset(key: string, field: string, value: unknown, ttlSeconds?: number): Promise<void>;
   hgetall<T>(key: string): Promise<Record<string, T>>;
   hdel(key: string, ...fields: string[]): Promise<void>;
   rpush(key: string, value: unknown, ttlSeconds: number): Promise<void>;
@@ -39,7 +39,10 @@ function redisStore(redis: Redis): Store {
       const [count] = await redis.multi().incr(key).expire(key, window, 'NX').exec<[number, number]>();
       return count;
     },
-    async hset(key, field, value) { await redis.hset(key, { [field]: value }); },
+    async hset(key, field, value, ttl) {
+      if (ttl) await redis.multi().hset(key, { [field]: value }).expire(key, ttl).exec();
+      else await redis.hset(key, { [field]: value });
+    },
     async hgetall<T>(key: string) { return ((await redis.hgetall<Record<string, T>>(key)) ?? {}) as Record<string, T>; },
     async hdel(key, ...fields) { if (fields.length) await redis.hdel(key, ...fields); },
     async rpush(key, value, ttl) { await redis.multi().rpush(key, value).expire(key, ttl).exec(); },
@@ -67,7 +70,10 @@ function tcpStore(redis: IORedis): Store {
       const result = await redis.multi().incr(key).expire(key, window, 'NX').exec();
       return Number(result?.[0]?.[1] ?? 0);
     },
-    async hset(key, field, value) { await redis.hset(key, field, enc(value)); },
+    async hset(key, field, value, ttl) {
+      if (ttl) await redis.multi().hset(key, field, enc(value)).expire(key, ttl).exec();
+      else await redis.hset(key, field, enc(value));
+    },
     async hgetall<T>(key: string) {
       const raw = await redis.hgetall(key);
       return Object.fromEntries(Object.entries(raw).map(([f, v]) => [f, dec<T>(v) as T]));
@@ -104,10 +110,10 @@ function memoryStore(): Store {
       values.set(key, { value: next, until: hit?.until || Date.now() + window * 1000 });
       return next;
     },
-    async hset(key, field, value) {
+    async hset(key, field, value, ttl) {
       const hash = (live(key)?.value as Record<string, unknown>) ?? {};
       hash[field] = structuredClone(value);
-      put(key, hash);
+      put(key, hash, ttl);
     },
     async hgetall<T>(key: string) { return structuredClone((live(key)?.value as Record<string, T>) ?? {}); },
     async hdel(key, ...fields) {

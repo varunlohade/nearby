@@ -2,6 +2,8 @@
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
+import { roamPlayers } from './roam-players.js';
+
 interface Creds { appKey: string; secret: string; host: string }
 
 async function call(c: Creds, path: string, body: unknown): Promise<{code: number; result?: {accessToken?: string; channelId?: string}}> {
@@ -60,6 +62,11 @@ export function nexconnApi(c: Creds) {
         if (r.code !== 0 || !r.result?.accessToken) return send(502, {error:'Token issue failed (' + r.code + ')'});
         if (session.cookie) res.setHeader('Set-Cookie', session.cookie + (req.headers.origin?.startsWith('https://') ? '; Secure' : ''));
         return send(200, {token:r.result.accessToken});
+      }
+      if (req.url === '/api/nexconn/roam') {
+        if (session.cookie) return send(401, {error:'Connect to Nexconn to meet players.'});
+        const players = await roamPlayers(session.id, body);
+        return players ? send(200, {players}) : send(400, {error:'Choose a spot in Free Roam.'});
       }
       if (req.url === '/api/nexconn/room') {
         if (session.cookie) return send(401, {error:'Connect first'});

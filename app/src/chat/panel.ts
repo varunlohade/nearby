@@ -164,6 +164,8 @@ export function chatPanel(onState: (data: Record<string,string>) => void, onAvai
   retry.onclick = () => { void enter(selected,true); };
   return {
     get user() { return identity; },
+    get canCall() { return Boolean(service?.offerCall && ready); },
+    callUser(id:string, name:string) { service?.offerCall?.(id,name); },
     get areaReady() { return ready && canWriteMetadata && selected?.id === area?.id; },
     setArea(room: ChatRoom) { area = room; return enter(room,true); },
     openArea() { if (area) return enter(area); },

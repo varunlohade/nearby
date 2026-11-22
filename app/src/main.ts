@@ -10,6 +10,8 @@ import { mountCommunities } from './community/community';
 import { chatPanel as createChatPanel } from './chat/panel';
 import { EarthExperience, type Activity, type Place } from './world/earth';
 
+import './ui/phone-map.css';
+
 if (new URLSearchParams(location.search).has('instant')) document.documentElement.classList.add('instant');
 
 const $ = <T extends HTMLElement>(selector: string) => document.querySelector(selector) as T;
@@ -165,6 +167,29 @@ function setActive(id: string | null) {
 }
 
 let opener: HTMLElement | null = null;
+
+const phoneActivities = $<HTMLButtonElement>('#phone-activities');
+function showPhoneActivities(open: boolean) {
+  activityPanel.classList.toggle('phone-open', open);
+  phoneActivities.setAttribute('aria-expanded', String(open));
+}
+phoneActivities.onclick = () => showPhoneActivities(!activityPanel.classList.contains('phone-open'));
+document.addEventListener('click', event => {
+  const clicked = event.target as Element;
+  if (!clicked.closest('#phone-activities,#activity-panel') || clicked.closest('#activity-panel button')) showPhoneActivities(false);
+  const action = clicked.closest<HTMLButtonElement>('[data-map-action]')?.dataset.mapAction;
+  if (action) {
+    const menu = $('#phone-options');
+    if (menu.matches(':popover-open')) menu.hidePopover();
+    $<HTMLButtonElement>(action)?.click();
+  }
+});
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && activityPanel.classList.contains('phone-open')) {
+    showPhoneActivities(false);
+    phoneActivities.focus();
+  }
+});
 
 function openEvent(id: string, trigger: HTMLElement) {
   if (create?.has(id)) { closeEvent(); setChatOpen(false); create.open(id); return; }
@@ -389,6 +414,9 @@ async function start() {
     setProgress(8, 'Building Earth');
     await world.ready((value, label) => setProgress(8 + value * 25, label));
     await landAt(await placeAt(at[0], at[1]));
+    if (new URLSearchParams(location.search).get('meet') === '1' && Math.abs(at[0]) <= 85 && Math.abs(at[1]) <= 180) {
+      meeting = [at[1],at[0]]; $('#enter-roam').click();
+    }
     return;
   }
   setProgress(8, 'Building Earth');
@@ -433,14 +461,17 @@ function setRoam(active: boolean) {
   $('#roam-controls').hidden = !active;
   $('.district-meta').textContent = active ? 'Free roam' : 'Current area';
 }
+let meeting: [number,number] | undefined;
 $('#enter-roam').onclick = () => {
+  const target = meeting; meeting = undefined;
+  if (target) atlas['map'].jumpTo({center:target});
   closeEvent();
   setChatOpen(false);
   // Free Roam: drive, walk or fly through this area (src/roam).
   // Loaded on demand so Free Roam (three.js scene code, physics, character) does not grow the first load.
   void import('./roam/roam').then(({ openRoam }) =>
     openRoam({ map: atlas['map'], place, activities, user: chat.user,
-      openChat: openMapConversation,
+      openChat: openMapConversation, meeting:target, liveUser:() => ({name:chat.user.name,canCall:chat.canCall}), callUser:chat.callUser,
       onExit: () => { setChatOpen(false); void chat.openArea(); $('#enter-roam').focus({preventScroll: true}); } }));
 };
 $('#leave-roam').onclick = () => {

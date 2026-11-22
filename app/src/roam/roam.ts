@@ -21,6 +21,7 @@ import type maplibregl from 'maplibre-gl';
 import './roam.css';
 import { AudioSession } from '../create/audio';
 import type { Activity, Place } from '../world/earth';
+import { RoamPlayers } from './players';
 import { Frame, type XZ } from './data';
 import { WorldStream } from './stream';
 import { COLORS, makeBeacon, makeCar, makeRoute, makeSparks, makeTraffic } from './build';
@@ -35,6 +36,9 @@ export interface RoamOptions {
   activities: Activity[];
   user: { name: string };
   openChat: (room: string, title: string, kind: string) => void;
+  liveUser: () => {name:string; canCall:boolean};
+  callUser: (id:string, name:string) => void;
+  meeting?: [number, number];
   onExit?: () => void;
 }
 
@@ -112,6 +116,7 @@ class Roam {
   private lastCar?: Vehicle;
   private human?: Walker;
   private crowd?: Crowd;
+  private players?: RoamPlayers;
   private humanAsset?: Promise<HumanAsset | null>;
   private walker = { x: 0, z: 0, h: 0 };
   private drone = { x: 0, z: 0, h: 0, alt: 70 };
@@ -195,6 +200,7 @@ class Roam {
       this.scene.add(this.crowd.group);
     }
     this.spawn();
+    this.players = new RoamPlayers(this.root,this.scene,this.frame,asset,() => this.position(),this.options.liveUser,this.options.callUser);
     this.root.querySelector('.roam-loading')!.remove();
     this.stats.firstPlayableMs = Math.round(performance.now() - this.started);
     if (localStorage.getItem('nearby.roam.onboarded') !== '1') this.onboarding(true);
@@ -214,6 +220,7 @@ class Roam {
     cancelAnimationFrame(this.raf);
     this.timers.forEach(clearInterval);
     this.audio?.session.leave();
+    this.players?.dispose();
     this.crowd?.dispose();
     this.human?.body.dispose();
     this.stream?.dispose();
@@ -260,7 +267,7 @@ class Roam {
       <div class="roam-speed"><b>0</b><small>km/h</small><i><s></s></i></div>
       <aside class="roam-places" hidden><header><b>Places nearby</b><button type="button" aria-label="Close">×</button></header><ol></ol></aside>
       <div class="roam-bigmap" hidden><canvas></canvas><p>Tap anywhere to get a route there</p><button type="button">Close</button></div>
-      <button type="button" class="roam-chat">Talk nearby</button>
+      <div class="roam-social"><button type="button" class="roam-chat">Talk nearby</button><button type="button" class="roam-peer-call" hidden></button><button type="button" class="roam-invite" title="Share your spot in Free Roam">Invite</button></div>
       <section class="roam-live" hidden></section>
       <div class="roam-touch" ${this.touch ? '' : 'hidden'}>
         <div class="roam-stick"><i></i></div>
@@ -282,6 +289,16 @@ class Roam {
       this.keys.clear();
       const room = this.conversation();
       this.options.openChat(room.id,room.title,room.kind);
+    };
+    q('.roam-invite').onclick = async () => {
+      const [lng,lat] = this.frame.toLngLat(...this.position());
+      const link = new URL('/',location.href);
+      link.searchParams.set('at',lat.toFixed(5)+','+lng.toFixed(5));
+      link.searchParams.set('meet','1');
+      try {
+        if (navigator.share) await navigator.share({title:'Meet me in Free Roam',url:link.href});
+        else { await navigator.clipboard.writeText(link.href); this.toast('Meeting link copied'); }
+      } catch (error) { if ((error as Error).name !== 'AbortError') window.prompt('Copy your Free Roam meeting link',link.href); }
     };
     q('.roam-help').onclick = () => this.onboarding(true);
     q('.roam-places-btn').onclick = () => this.togglePlaces();
@@ -466,6 +483,7 @@ class Roam {
     const pick = [...this.spots].filter(s => s.kind !== 'landmark').sort((a, b) => Math.hypot(a.x, a.z) - Math.hypot(b.x, b.z))[0];
     const target: XZ = pick && Math.hypot(pick.x, pick.z) < 700 ? [pick.x, pick.z] : [0, 0];
     const start = this.stream.graph.spawnNear(target[0], target[1]) ?? { point: target, heading: 0 };
+    if (this.options.meeting) start.point = this.frame.toLocal(...this.options.meeting);
     this.stream.buildAround(start.point[0], start.point[1]);
     this.driving = this.newVehicle(COLORS.accent, start.point[0], start.point[1], start.heading);
     this.driving.driver = 'player';
@@ -774,6 +792,7 @@ class Roam {
       s.beacon.ring.scale.setScalar(1 + 0.12 * Math.sin(this.beaconTime * 3 + s.x));
     }
     if (this.route) (this.route.mesh.material as THREE.ShaderMaterial).uniforms.time.value = this.beaconTime;
+    this.players?.update(this.camera,dt);
     this.renderer.render(this.scene, this.camera);
     this.updateLabels();
     if (now > this.nextTick) {
@@ -1331,6 +1350,9 @@ class Roam {
     g.fillStyle = '#9da3a8';
     for (const t of this.traffic) if (t.x < 1e5) { g.beginPath(); g.arc(t.x, t.z, 2.2 * dpr / scale / 2, 0, Math.PI * 2); g.fill(); }
     for (const v of this.vehicles) if (v !== this.driving) { g.fillStyle = '#' + v.color.toString(16).padStart(6, '0'); g.beginPath(); g.arc(v.x, v.z, 2.6 * dpr / scale / 2, 0, Math.PI * 2); g.fill(); }
+    for (const p of this.players?.avatars.values() ?? []) {
+      g.fillStyle = '#90f5d7'; g.beginPath(); g.arc(p.x,p.z,4*dpr/scale,0,Math.PI*2); g.fill();
+    }
     for (const sp of this.spots) {
       const pulse = sp.kind === 'audio' && (sp.live ?? 0) > 0 ? 1 + 0.35 * Math.sin(this.beaconTime * 5) : 1;
       g.fillStyle = '#' + sp.color.toString(16).padStart(6, '0');
@@ -1385,6 +1407,7 @@ class Roam {
         <h2>Explore your neighbourhood</h2>
         <p>Real streets and buildings, streamed from the map as you go. Drive, walk or fly a drone. Glowing columns mark places: activities, rooms, events and live audio.</p>
         <ul>${keys}
+          <li><b>Meet people</b><span>Invite a friend to your virtual spot. Within 60 m, tap their name to call. Other players see your avatar here.</span></li>
           <li><b>Go places</b><span>Tap the mini-map or open Places to get a route, or jump straight there</span></li>
           <li><b>Live audio</b><span>Get within ${LISTEN_RADIUS} m of a pink column to listen in; the people talking can see you are listening</span></li></ul>
         <button type="button">Start exploring</button>

@@ -378,7 +378,7 @@ export function mountAsk(options: AskOptions) {
 
   function setLabel() {
     const place = options.place();
-    input.placeholder = place ? `Ask about ${place.locality}, or tell me what to show…` : 'Ask about this area…';
+    input.placeholder = place ? `Ask about ${place.locality}…` : 'Ask about this area…';
     $('.ask-where').textContent = place ? `Local guide · ${place.locality}` : 'Local guide';
   }
 
