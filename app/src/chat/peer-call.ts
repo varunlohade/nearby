@@ -27,6 +27,13 @@ interface Session {
   pc?: RTCPeerConnection;
   media?: MediaStream;
 }
+function mediaError(error: unknown) {
+  if (error instanceof DOMException) {
+    if (error.name === 'NotAllowedError') return 'Allow microphone or camera access in your browser, then call again.';
+    if (error.name === 'NotFoundError') return 'Your browser could not find the requested microphone or camera.';
+  }
+  return 'Could not connect. Check your media devices and network connection.';
+}
 export function peerCalls(
   local: HTMLVideoElement,
   remote: HTMLVideoElement,
@@ -69,8 +76,8 @@ export function peerCalls(
       media.getTracks().forEach((t) => t.stop());
       throw Error('Call ended');
     }
-    const pc = new RTCPeerConnection(network);
     s.media = media;
+    const pc = new RTCPeerConnection(network);
     s.pc = pc;
     local.srcObject = media;
     media.getTracks().forEach((t) => pc.addTrack(t, media));
@@ -141,8 +148,8 @@ export function peerCalls(
       ) {
         await s.pc.setRemoteDescription({ type: 'answer', sdp: m.sdp });
       }
-    } catch {
-      if (current === s) stop('Could not connect. Check media permissions and network access.', true);
+    } catch (error) {
+      if (current === s) stop(mediaError(error), true);
     }
   }
   NCEngine.addMessageHandler(
@@ -186,8 +193,8 @@ export function peerCalls(
       try {
         await connection(s);
         if (current === s) await send(s, 'accept');
-      } catch {
-        if (current === s) stop('Could not open your camera or microphone.', true);
+      } catch (error) {
+        if (current === s) stop(mediaError(error), true);
       }
     },
     end: () => stop('Call ended.', true),
