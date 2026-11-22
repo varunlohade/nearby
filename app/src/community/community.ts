@@ -15,13 +15,15 @@ interface Community {
 interface Post { id: string; text: string; by: Agentish; created: number; mine?: boolean }
 interface Req { id: string; community: string; title: string; details: string; wantsContact: boolean; by: Agentish; created: number; status: 'open' | 'done'; replies: number; mine?: boolean }
 interface Reply { id: string; message: string; contact?: string; sharedContact?: boolean; by: Agentish; created: number; mine?: boolean }
-interface Neighbour { id: string; name: string; km: number }
+interface Neighbour { id: string; name: string; km: number; lat: number; lng: number; callId?: string }
 interface AgentInfo { keyId: string; label: string; kind: string; created: number; last: number | null; log: { at: number; tool: string; ok: boolean; note: string }[] }
 
 interface Options {
   map: () => maplibregl.Map;
   place: () => Place | undefined;
   user: () => { userId: string; name: string };
+  canCall: () => boolean;
+  callUser: (id: string, name: string) => void;
   openChat: (roomId: string, title: string, kind: string) => void;
 }
 
@@ -292,47 +294,143 @@ export function mountCommunities(options: Options) {
   // ------------------------------------------------------------ neighbours nearby (opt-in)
   const toggle = section.querySelector<HTMLInputElement>('.cm-toggle input')!;
   const nearButton = section.querySelector<HTMLButtonElement>('.cm-near-count')!;
+  const mobileCount = document.createElement('button');
+  mobileCount.type = 'button';
+  mobileCount.className = 'neighbourhood-count';
+  mobileCount.textContent = 'People nearby';
+  app.append(mobileCount);
+  const personPins = new Map<string, maplibregl.Marker>();
   let neighbours: Neighbour[] = [];
+  let total: number | undefined;
+  let agents = 0;
+  let agentKinds: Record<string, number> = {};
+  let agentsSelected = false;
+  let listing = '';
+  let refreshVersion = 0;
+  let pendingWrite = Promise.resolve();
+  let heartbeatAt = 0;
+  let published = '';
   toggle.checked = localStorage.getItem('nearby.presence') === 'on';
-  async function beat() {
-    const place = options.place();
-    if (!place || !document.body.classList.contains('on-map')) return;
-    if (toggle.checked) await api('/api/presence', { lat: place.lat, lng: place.lng }).catch(() => undefined);
-    try {
-      const found = await api<{ count: number; people: Neighbour[] }>(`/api/presence?lat=${place.lat.toFixed(4)}&lng=${place.lng.toFixed(4)}`);
-      neighbours = found.people;
-      nearButton.querySelector('span')!.textContent = found.count ? `${found.count} neighbour${found.count === 1 ? '' : 's'} nearby` : toggle.checked ? 'You are visible · nobody else yet' : 'No neighbours visible yet';
-      nearButton.classList.toggle('has', found.count > 0);
-    } catch { /* ignore */ }
+
+  function counts() {
+    if (total === undefined) return 'Neighbourhood activity';
+    return `${total} ${total === 1 ? 'person' : 'people'} · ${agents} ${agents === 1 ? 'agent' : 'agents'}`;
   }
-  toggle.onchange = async () => {
-    localStorage.setItem('nearby.presence', toggle.checked ? 'on' : 'off');
-    if (!toggle.checked) await api('/api/presence', { on: false }).catch(() => undefined);
-    void beat();
-  };
-  setInterval(() => { if (!document.hidden) void beat(); }, 45000);
-  nearButton.onclick = () => {
+  function renderNeighbours() {
+    const rows = listing === 'all' ? neighbours : neighbours.filter(n => cell(n) === listing);
+    const body = sheet.querySelector<HTMLElement>('.neighbourhood-body');
+    if (!body || sheet.hidden) return;
+    const peopleTab = sheet.querySelector<HTMLButtonElement>('[data-view="people"]')!;
+    const agentsTab = sheet.querySelector<HTMLButtonElement>('[data-view="agents"]')!;
+    peopleTab.textContent = 'People · ' + (total ?? '…');
+    agentsTab.textContent = 'Agents · ' + (total === undefined ? '…' : agents);
+    peopleTab.setAttribute('aria-pressed', String(!agentsSelected));
+    agentsTab.setAttribute('aria-pressed', String(agentsSelected));
+    const agentRows = Object.entries(agentKinds).sort(([,a],[,b]) => b-a).map(([kind, count]) =>
+      `<li><b>${esc(kind === 'custom' ? 'Custom agent' : AGENT_KINDS[kind] || 'Agent')}</b> <span>${count}</span></li>`).join('');
+    const markup = agentsSelected
+      ? `<p class="cm-lede">Agents active within 5 km in the last 15 minutes.</p><ul class="cm-members">${agentRows || '<li class="cm-empty">No recent agent activity here.</li>'}</ul>`
+      : `<p class="cm-lede">${esc(counts())} within 5 km. People choose to appear here. Agents have used a local tool in the past 15 minutes.</p>
+      <ul class="cm-members">${rows.map(n => `<li><span class="cm-avatar">${esc(n.name.slice(0,1))}</span>
+        <b>${esc(n.name)}</b><small>~${n.km} km</small>
+        <button type="button" data-person="${esc(n.id)}" ${n.callId && options.canCall() ? '' : 'disabled'}>${n.callId && options.canCall() ? 'Call' : 'Call unavailable'}</button>
+        <button type="button" data-hi="${esc(n.name)}">Say hi</button></li>`).join('') || '<li class="cm-empty">No other people visible here yet.</li>'}</ul>`;
+    if (body.dataset.rendered !== markup) { body.innerHTML = markup; body.dataset.rendered = markup; }
+    const check = sheet.querySelector<HTMLInputElement>('[data-show-me]');
+    if (check) check.checked = toggle.checked;
+  }
+  function showNeighbours(key = 'all') {
+    listing = key; agentsSelected = false;
     sheet.hidden = false; openId = '';
     document.body.classList.add('cm-open');
     sheet.style.removeProperty('--cm');
-    sheet.innerHTML = `
-      <header class="cm-panel-head"><span class="cm-kicker">Neighbours nearby</span><button type="button" class="cm-x" aria-label="Close">×</button></header>
-      <p class="cm-lede">People within about 5 km who chose to be visible. Positions are rounded to about 500 m and never shown exactly.
-        ${toggle.checked ? 'You are visible as <b>' + esc(options.user().name) + '</b>.' : 'Turn on <b>Show me</b> to appear here too.'}</p>
-      <ul class="cm-members">${neighbours.map(n => `<li><span class="cm-avatar">${esc(n.name.slice(0, 1).toUpperCase())}</span>${esc(n.name)} <small>~${n.km} km</small>
-        <button type="button" data-hi="${esc(n.name)}">Say hi</button></li>`).join('') || '<li class="cm-empty">Nobody visible right now. Check back later, or start a community.</li>'}</ul>`;
+    sheet.innerHTML = `<header class="cm-panel-head"><h3>People nearby</h3><button type="button" class="cm-x" aria-label="Close">×</button></header>
+      <label class="neighbourhood-visibility"><input type="checkbox" data-show-me> Show me on the map for calls</label>
+      <p class="cm-lede">Your pin shows your approximate area.</p>
+      <div class="neighbourhood-views" aria-label="Neighbourhood activity"><button type="button" data-view="people">People</button><button type="button" data-view="agents">Agents</button></div><div class="neighbourhood-body"></div>`;
     sheet.querySelector<HTMLButtonElement>('.cm-x')!.onclick = closeSheet;
-    sheet.querySelectorAll<HTMLButtonElement>('[data-hi]').forEach(b => {
-      b.onclick = () => {
-        closeSheet();
-        document.querySelector<HTMLButtonElement>('#mobile-chat')?.click();
-        setTimeout(() => {
-          const box = document.querySelector<HTMLInputElement>('#message-input');
-          if (box) { box.value = `@${b.dataset.hi} hi 👋 I'm nearby too!`; box.focus(); }
-        }, 350);
-      };
-    });
+    sheet.querySelector<HTMLInputElement>('[data-show-me]')!.onchange = () => toggle.click();
+    renderNeighbours();
+    void beat();
+  }
+  sheet.addEventListener('click', event => {
+    const button = (event.target as Element).closest<HTMLButtonElement>('button');
+    if (button?.dataset.view) {
+      agentsSelected = button.dataset.view === 'agents'; listing = 'all'; renderNeighbours();
+    } else if (button?.dataset.person) {
+      const person = neighbours.find(n => n.id === button.dataset.person);
+      if (person?.callId && options.canCall()) options.callUser(person.callId, person.name);
+    } else if (button?.dataset.hi) {
+      closeSheet(); document.querySelector<HTMLButtonElement>('#mobile-chat')?.click();
+      const field = document.querySelector<HTMLInputElement>('#message-input');
+      if (field) { field.value = '@' + button.dataset.hi + ' hi!'; field.focus(); }
+    }
+  });
+  const cell = (n: Neighbour) => n.lat + ',' + n.lng;
+  function drawPeople() {
+    const groups = new Map<string, Neighbour[]>();
+    for (const n of neighbours) {
+      const key = cell(n);
+      const group = groups.get(key) || [];
+      group.push(n); groups.set(key, group);
+    }
+    for (const [key, pin] of personPins) if (!groups.has(key)) { pin.remove(); personPins.delete(key); }
+    for (const [key, group] of groups) {
+      const first = group[0];
+      let pin = personPins.get(key);
+      if (!pin) {
+        const button = document.createElement('button');
+        button.type = 'button'; button.className = 'neighbourhood-pin';
+        button.onclick = event => { event.stopPropagation(); showNeighbours(key); };
+        pin = new maplibregl.Marker({element:button}).setLngLat([first.lng, first.lat]).addTo(options.map());
+        personPins.set(key, pin);
+      }
+      const button = pin.getElement();
+      button.textContent = group.length === 1 ? first.name : group.length + ' people';
+      button.setAttribute('aria-label', 'People nearby · ' + button.textContent);
+    }
+    nearButton.querySelector('span')!.textContent = mobileCount.textContent = counts();
+    nearButton.classList.toggle('has', Boolean(total));
+    renderNeighbours();
+  }
+  function publish(on: boolean, point?: { lat: number; lng: number }, callable = false) {
+    const write = () => api(callable ? '/api/nexconn/presence' : '/api/presence', on ? point : { on: false }).then(() => {});
+    pendingWrite = pendingWrite.catch(() => {}).then(write);
+    return pendingWrite;
+  }
+  async function beat() {
+    const place = options.place();
+    if (!place || !document.body.classList.contains('on-map') || document.hidden) return;
+    const version = ++refreshVersion;
+    const point = { lat: Math.round(place.lat * 200) / 200, lng: Math.round(place.lng * 200) / 200 };
+    const callable = options.canCall();
+    const key = [point.lat, point.lng, callable].join('|');
+    try {
+      if (toggle.checked && (published !== key || Date.now() - heartbeatAt > 40000)) {
+        published = key; heartbeatAt = Date.now();
+        try { await publish(true, point, callable); } catch (error) { published = ''; throw error; }
+      }
+      const data = await api<{ people: Neighbour[]; total: number; agents: number; agentKinds: Record<string, number> }>(`/api/presence?lat=${point.lat}&lng=${point.lng}`);
+      if (version !== refreshVersion || place !== options.place()) return;
+      neighbours = data.people; total = data.total; agents = data.agents; agentKinds = data.agentKinds; drawPeople();
+    } catch {
+      if (version !== refreshVersion) return;
+      neighbours = []; total = undefined; agentKinds = {}; drawPeople();
+      nearButton.querySelector('span')!.textContent = mobileCount.textContent = 'People unavailable';
+    }
+  }
+  toggle.onchange = async () => {
+    localStorage.setItem('nearby.presence', toggle.checked ? 'on' : 'off');
+    published = ''; ++refreshVersion;
+    if (!toggle.checked) {
+      try { await publish(false); }
+      catch { toggle.checked = true; localStorage.setItem('nearby.presence','on'); alert('Could not hide your pin. Please try again.'); }
+    }
+    void beat();
   };
+  setInterval(() => void beat(), 6000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) void beat(); });
+  nearButton.onclick = mobileCount.onclick = () => showNeighbours();
 
   // ------------------------------------------------------------ agents
   const dialog = document.createElement('dialog');
@@ -404,7 +502,7 @@ export function mountCommunities(options: Options) {
   let lastPlace: Place | undefined;
   new MutationObserver(() => {
     const place = options.place();
-    if (document.body.classList.contains('on-map') && place !== lastPlace) { lastPlace = place; closeSheet(); soon(0); void beat(); }
+    if (document.body.classList.contains('on-map') && place !== lastPlace) { lastPlace = place; neighbours = []; total = undefined; agentKinds = {}; drawPeople(); closeSheet(); soon(0); void beat(); }
   }).observe(document.body, { attributes: true, attributeFilter: ['class'] });
   addEventListener('keydown', event => { if (event.key === 'Escape' && !sheet.hidden && !dialog.open) closeSheet(); });
 

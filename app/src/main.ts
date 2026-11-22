@@ -425,6 +425,7 @@ async function start() {
     },
   });
   mountCommunities({
+    canCall: () => chat.canCall, callUser: (id, name) => chat.callUser(id, name),
     map: () => atlas['map'], place: () => place, user: () => chat.user,
     openChat: openMapConversation,
   });

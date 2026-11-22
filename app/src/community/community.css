@@ -133,3 +133,21 @@
   .cm-list { max-height: 30dvh; overflow-y: auto; }
   .cm-section { padding: 8px 10px; }
 }
+
+.neighbourhood-pin, .neighbourhood-count {
+  border: 1px solid #375b45; border-radius: 24px; padding: 7px 13px;
+  color: #163c27; background: #f5fff4; font: 600 13px/1.25 Geist, sans-serif;
+  box-shadow: 0 2px 8px #16291c22; cursor: pointer;
+}
+.neighbourhood-pin { z-index: 2; max-width: 12rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.neighbourhood-pin::before { content: ''; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #358755; margin-right: 6px; }
+.neighbourhood-count { display: none; }
+.neighbourhood-visibility { display: flex; align-items: center; gap: 8px; min-height: 44px; }
+.neighbourhood-body .cm-members li { flex-wrap: wrap; }
+@media (max-width: 720px) {
+  .on-map .neighbourhood-count { display: block; position: absolute; left: 12px; bottom: calc(88px + env(safe-area-inset-bottom)); z-index: 4; min-height: 44px; }
+  .on-map:is(.cm-open,.chat-open,.waypoint-open,.creating,.create-open,.ask-open,.picking) .neighbourhood-count, .on-map:has(.phone-open) .neighbourhood-count { display: none; }
+}
+.neighbourhood-views { display: flex; gap: 5px; margin: 6px 0; }
+.neighbourhood-views button { color: #294434; background: #f1f5ef; border: 1px solid #c3d0c2; border-radius: 20px; min-height: 44px; padding: 6px 14px; }
+.neighbourhood-views button[aria-pressed=true] { color: #fff; background: #28553c; border-color: #28553c; }

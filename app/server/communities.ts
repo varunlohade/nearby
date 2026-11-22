@@ -17,6 +17,7 @@
 //   myreqs:<visitorId>       list  { community, request } (newest 100)
 //   presence                 hash  visitorId -> { name, lat, lng, seen }   (opt-in, ~500 m)
 
+import { recentAgentVisits } from './agent-activity.js';
 import { randomBytes } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { allow, clientIp, getStore } from './store.js';
@@ -189,18 +190,26 @@ export async function myRequests(owner: string) {
 }
 
 // ---------------------------------------------------------------- presence (opt-in)
-interface Presence { name: string; lat: number; lng: number; seen: number }
+interface Presence { callId?: string; name: string; lat: number; lng: number; seen: number }
 const coarse = (v: number) => Math.round(v * 200) / 200; // ~500 m grid: exact positions are never stored
 
-export async function nearbyPeople(at: { lat: number; lng: number }, self?: string, radiusKm = 5) {
+async function nearbyPeople(at: { lat: number; lng: number }, self?: string, radiusKm = 5) {
   const all = await getStore().hgetall<Presence>('presence');
   const now = Date.now();
   const stale = Object.keys(all).filter(k => now - all[k].seen > PRESENCE_TTL);
-  if (stale.length) void getStore().hdel('presence', ...stale);
-  return Object.entries(all)
-    .filter(([k, p]) => k !== self && now - p.seen <= PRESENCE_TTL && km(at, p) <= radiusKm)
-    .map(([k, p]) => ({ id: k.slice(-8), name: p.name, km: Math.max(0.5, Math.round(km(at, p) * 2) / 2) }))
-    .sort((a, b) => a.km - b.km).slice(0, 50);
+  if (stale.length) await getStore().hdel('presence', ...stale);
+  const nearby = Object.entries(all)
+    .filter(([, p]) => now - p.seen <= PRESENCE_TTL && km(at, p) <= radiusKm)
+    .map(([k, p]) => ({ self: k === self, id: k.slice(-8), name: p.name, lat: p.lat, lng: p.lng, callId: p.callId, km: Math.max(0.5, Math.round(km(at, p) * 2) / 2) }))
+    .sort((a, b) => a.km - b.km);
+  const visits = (await recentAgentVisits()).filter(point => km(at, point) <= radiusKm);
+  const agentKinds: Record<string, number> = {};
+  for (const visit of visits) {
+    const kind = visit.kind || 'custom';
+    agentKinds[kind] = (agentKinds[kind] || 0) + 1;
+  }
+  const others = nearby.filter(person => !person.self);
+  return { people: others.slice(0, 50), count: others.length, total: nearby.length, agents: visits.length, agentKinds };
 }
 
 /** What other people may see of an author: the name and the agent label, never the visitor id. */
@@ -215,7 +224,7 @@ export async function readJson(req: IncomingMessage, limit = 8000): Promise<Reco
   return raw ? JSON.parse(raw) : {};
 }
 
-export function communitiesApi() {
+export function communitiesApi(callId?: string) {
   return async (req: IncomingMessage, res: ServerResponse, next: Next) => {
     const url = new URL(req.url ?? '/', 'http://local');
     const path = url.pathname;
@@ -242,17 +251,16 @@ export function communitiesApi() {
       if (path === '/api/presence') {
         if (req.method === 'POST') {
           const body = await readJson(req);
-          if (!(await limit('presence', 120, 3600))) return send(429, { error: 'Slow down.' });
+          if (body.on !== false && !(await limit('presence', 180, 3600))) return send(429, { error: 'Slow down.' });
           if (body.on === false) { await getStore().hdel('presence', me.id); return send(200, { on: false }); }
           const lat = Number(body.lat), lng = Number(body.lng);
           if (!validPoint(lat, lng)) return send(400, { error: 'lat and lng required' });
-          await getStore().hset('presence', me.id, { name: me.name, lat: coarse(lat), lng: coarse(lng), seen: Date.now() });
+          await getStore().hset('presence', me.id, { callId, name: me.name, lat: coarse(lat), lng: coarse(lng), seen: Date.now() });
           return send(200, { on: true });
         }
         const lat = Number(url.searchParams.get('lat') ?? NaN), lng = Number(url.searchParams.get('lng') ?? NaN);
         if (!validPoint(lat, lng)) return send(400, { error: 'lat and lng required' });
-        const people = await nearbyPeople({ lat, lng }, me.id);
-        return send(200, { count: people.length, people });
+        return send(200, await nearbyPeople({ lat, lng }, me.id));
       }
 
       if (path === '/api/requests/mine' && req.method === 'GET') return send(200, { requests: await myRequests(me.id) });

@@ -1,4 +1,5 @@
 // Nexconn Platform API requests are signed on the server.
+import { communitiesApi } from './communities.js';
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
@@ -45,6 +46,12 @@ export function nexconnApi(c: Creds) {
     if (req.method !== 'POST') return send(405, {error:'POST required'});
     if (!c.appKey || !c.secret) return send(503, {error:'Nexconn credentials missing'});
     if (!req.headers['content-type']?.startsWith('application/json')) return send(415, {error:'JSON required'});
+    if (req.url === '/api/nexconn/presence') {
+      const session = guest(req, c.secret);
+      if (session.cookie) return send(401, { error: 'Connect to chat first.' });
+      req.url = '/api/presence';
+      return communitiesApi(session.id)(req, res, next);
+    }
     try {
       let raw = '';
       for await (const chunk of req) {

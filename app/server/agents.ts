@@ -13,6 +13,7 @@
 //   myagents:<visitor>   hash  keyId -> AgentKey (without the hash's secret)
 //   agentlog:<keyId>     list  log entries (newest 60)
 
+import { recordAgentVisit } from './agent-activity.js';
 import { createHash, randomBytes } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { allow, clientIp, getStore } from './store.js';
@@ -153,9 +154,22 @@ const summary = (name: string, args: Record<string, unknown>) =>
   : name === 'find_communities' ? `Searched communities${args.query ? ` for “${args.query}”` : ''}`
   : name.replaceAll('_', ' ');
 
+async function updateAgentArea(key: AgentKey, name: string, args: Record<string, unknown>) {
+  if (name === 'find_communities' || name === 'nearby_events') {
+    return recordAgentVisit(key.keyId, key.kind, Number(args.lat), Number(args.lng));
+  }
+  if (['community_info', 'read_messages', 'post_message', 'create_request', 'join_community'].includes(name)
+    && typeof args.community_id === 'string') {
+    const community = await getStore().hget<{ lat: number; lng: number }>('communities', args.community_id);
+    if (community) await recordAgentVisit(key.keyId, key.kind, community.lat, community.lng);
+  }
+}
+
 async function call(key: AgentKey, name: string, args: Record<string, unknown>) {
   try {
     const result = await runTool(key, name, args ?? {});
+    // Presence bookkeeping must not turn a successful post into a retry.
+    await updateAgentArea(key, name, args).catch(() => undefined);
     await log(key.keyId, name, true, summary(name, args ?? {}));
     if (!key.last || Date.now() - key.last > 60000) {
       key.last = Date.now();
