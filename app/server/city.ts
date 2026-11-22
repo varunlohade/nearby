@@ -23,6 +23,8 @@ interface Game extends Base {
   kind: 'game'; question: string; choices: string[]; picks: Record<string, number>;
   closes: number; locked: boolean; result: number | null; round: number; ended: boolean;
   history: { question: string; answer: string; correct: number; total: number }[];
+  /** Set on fixtures found by Claude (server/fixtures.ts). */
+  ai?: Record<string, unknown>;
 }
 type Entry = Game | Item;
 const HOLD = 15 * 60_000;
@@ -106,7 +108,7 @@ function view(e: Entry, me: Visitor, now: number) {
   const common = {id:e.id,title:e.title,venue:e.venue,owner:e.owner.name,mine:e.owner.id===me.id,created:e.created,revision:e.revision};
   if (e.kind === 'game') return {...common,kind:e.kind,question:e.question,choices:e.choices,round:e.round,closes:e.closes,
     locked:e.locked || now >= e.closes,result:e.result,ended:e.ended,history:e.history,pick:e.picks[me.id] ?? null,
-    counts:e.choices.map((_,i)=>Object.values(e.picks).filter(v=>v===i).length)};
+    counts:e.choices.map((_,i)=>Object.values(e.picks).filter(v=>v===i).length),ai:e.ai};
   const position=e.queue.findIndex(v=>v.id===me.id);
   const threads = e.inquiries ?? {};
   const inquiries = common.mine ? Object.values(threads) : threads[me.id] ? [threads[me.id]] : [];

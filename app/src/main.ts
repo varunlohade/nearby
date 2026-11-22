@@ -429,7 +429,7 @@ async function start() {
     openChat: openMapConversation,
   });
   mountMarket(() => place);
-  mountGames(() => place);
+  mountGames(() => place, () => atlas['map']);
   mountPhoneNavigation(() => {
     if (document.body.classList.contains('chat-open')) return chatRoute;
     if (previewId) return {type: 'preview', id: previewId};

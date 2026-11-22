@@ -1,3 +1,4 @@
+import maplibregl from 'maplibre-gl';
 import type { Place } from '../world/earth';
 import { cityScope } from './scope';
 import './games.css';
@@ -18,15 +19,28 @@ interface Game {
   pick: number | null;
   counts: number[];
   history: { question: string; answer: string; correct: number; total: number }[];
+  /** Fixtures found by Claude: real local matches and events, with its own pick. */
+  ai?: { fixture: string; kind: 'match' | 'event'; status: 'live' | 'upcoming'; start: number; pick: number; confidence: number; why: string; source: string; lat?: number; lng?: number };
 }
-type Screen = 'list' | 'game' | 'create' | 'next';
+type Screen = 'list' | 'game' | 'create' | 'next' | 'fixture';
 const esc = (value: string) => value.replace(/[&<>'"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[c]!);
 const same = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
 const isVoid = (game: Game) => game.ended && game.result === null;
 const isLocked = (game: Game) => game.ended || game.locked || game.closes <= Date.now();
 function timer(game: Game) {
   const seconds = Math.max(0, Math.ceil((game.closes - Date.now()) / 1000));
+  if (seconds >= 86400) return Math.floor(seconds / 86400) + 'd ' + Math.floor(seconds % 86400 / 3600) + 'h';
+  if (seconds >= 3600) return Math.floor(seconds / 3600) + 'h ' + Math.floor(seconds % 3600 / 60) + 'm';
   return Math.floor(seconds / 60) + ':' + String(seconds % 60).padStart(2, '0');
+}
+function when(start: number) {
+  const now = Date.now();
+  if (start <= now) return 'Live now';
+  const d = new Date(start), today = new Date();
+  const day = d.toDateString() === today.toDateString() ? 'Today'
+    : d.toDateString() === new Date(today.getTime() + 86400000).toDateString() ? 'Tomorrow'
+    : d.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
+  return day + ' · ' + d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 }
 function phase(game: Game) {
   if (isVoid(game)) return 'Ended, no result';
@@ -36,7 +50,7 @@ function phase(game: Game) {
   return 'Picks open';
 }
 
-export function mountGames(getPlace: () => Place | undefined) {
+export function mountGames(getPlace: () => Place | undefined, getMap?: () => maplibregl.Map) {
   const dialog = document.createElement('dialog');
   dialog.className = 'city-games';
   dialog.setAttribute('aria-labelledby', 'games-heading');
@@ -62,6 +76,9 @@ export function mountGames(getPlace: () => Place | undefined) {
   let confirmVoid = false;
   let lastRender = '';
   let pollWarning = false;
+  let discovering = false;
+  const discovered = new Set<string>();
+  let venueMarker: maplibregl.Marker | undefined;
 
   function statusMessage(message: string, syncError = false) {
     status.textContent = message;
@@ -82,16 +99,35 @@ export function mountGames(getPlace: () => Place | undefined) {
   function focusHeading() {
     (content.querySelector<HTMLElement>(screen === 'game' ? '.games-host h4' : 'h3') ?? content.querySelector<HTMLElement>('.games-title') ?? dialog.querySelector<HTMLElement>('#games-heading'))?.focus({preventScroll:true});
   }
+  /** Claude's fixtures, grouped: one row per match or event, with all of its questions. */
+  function fixtureGroups() {
+    const groups = new Map<string, Game[]>();
+    for (const g of games) if (g.ai) groups.set(g.ai.fixture, [...(groups.get(g.ai.fixture) ?? []), g]);
+    return [...groups.values()].sort((a, b) => a[0].ai!.start - b[0].ai!.start);
+  }
+  function aiSection() {
+    const groups = fixtureGroups();
+    const rows = groups.map(list => {
+      const f = list[0], made = list.filter(g => g.pick !== null).length;
+      const live = f.ai!.start <= Date.now();
+      return `<button class="games-fixture games-ai-fixture" data-act="fixture" data-id="${esc(f.ai!.fixture)}">
+        <span><strong>${esc(f.title)}</strong><small>${esc(f.venue)}</small><small class="games-when${live ? ' is-live' : ''}">${live ? '● ' : ''}${when(f.ai!.start)}</small></span>
+        <span class="games-tag">${made ? made + '/' + list.length + ' picked' : list.length + ' predictions'}</span><span aria-hidden="true">›</span></button>`;
+    }).join('');
+    return `<h3 tabindex="-1">Happening near you</h3>
+      ${rows || (discovering ? '<p class="games-empty games-finding">Claude is looking for matches and events near you…</p>' : '<p class="games-empty">No big matches or events found nearby this week.</p>')}`;
+  }
   function overview() {
-    const live = games.filter(g => !g.ended);
-    const finished = games.filter(g => g.ended);
+    const live = games.filter(g => !g.ended && !g.ai);
+    const finished = games.filter(g => g.ended && !g.ai);
     const rows = (entries: Game[]) => entries.map(g => `<button class="games-fixture" data-act="view" data-id="${esc(g.id)}">
       <span><strong>${esc(g.title)}</strong><small>${esc(g.venue)} · Round ${g.round}</small></span>
       <span class="games-tag">${phase(g)}</span><span aria-hidden="true">›</span></button>`).join('');
     return `<div class="games-intro"><p>Pick what happens next in a match near you. Free to play.</p>
       <button class="games-primary" data-act="host" ${loaded && scope ? '' : 'disabled'}>Host a fixture</button></div>
       ${!scope ? '<p>Choose a city on the map to find its fixtures.</p>' : !loaded ? '<p>Loading fixtures…</p>' : `
-      <h3 tabindex="-1">Live fixtures</h3>${live.length ? rows(live) : '<p class="games-empty">No live fixtures yet. At a match? Host its first question.</p>'}
+      ${aiSection()}
+      <h3>Hosted by people</h3>${live.length ? rows(live) : '<p class="games-empty">No live fixtures yet. At a match? Host its first question.</p>'}
       ${finished.length ? '<h3>Finished fixtures</h3>' + rows(finished) : ''}`}`;
   }
   const back = (label: string) => `<button class="games-back" data-act="back">← ${label}</button>`;
@@ -141,15 +177,70 @@ export function mountGames(getPlace: () => Place | undefined) {
         locked ? 'Picks are locked. Waiting for the host to confirm the outcome.' : game.pick === null ? 'Choose one option before picks close.' : 'Your pick is saved. You can change it until picks close.'}</p></section>${host}
       ${history.length ? `<h4>Previous rounds</h4><ol class="games-history">${history.map(r => `<li><strong>${esc(r.question)}</strong><small>${esc(r.answer)} · ${r.correct} of ${r.total} correct</small></li>`).join('')}</ol>` : ''}`;
   }
+  /** One match or event: every question on one screen, so people can make several predictions. */
+  function fixtureScreen(key: string) {
+    const list = games.filter(g => g.ai?.fixture === key);
+    if (!list.length) return back('Fixtures') + '<p>This fixture is no longer listed.</p>';
+    const f = list[0], ai = f.ai!;
+    const live = ai.start <= Date.now();
+    const questions = list.map(g => {
+      const locked = isLocked(g), total = g.counts.reduce((a, b) => a + b, 0);
+      const choices = g.choices.map((name, i) => `<button type="button" class="games-choice" data-act="pick" data-id="${esc(g.id)}" data-choice="${i}" aria-pressed="${g.pick === i}" ${locked ? 'disabled' : ''}>
+          <span><strong>${esc(name)}</strong>${g.ai!.pick === i ? '<small class="games-ai-pick">Claude\'s pick · ' + g.ai!.confidence + '%</small>' : ''}${g.pick === i ? '<small>Your pick</small>' : ''}</span>
+          <span>${g.counts[i]} ${g.counts[i] === 1 ? 'pick' : 'picks'}</span></button>`).join('');
+      return `<section class="games-round"><div class="games-meta"><span>${total} ${total === 1 ? 'prediction' : 'predictions'}</span>
+          ${locked ? '<span>Picks locked</span>' : '<span>Closes in <b>' + timer(g) + '</b></span>'}</div>
+        <h4>${esc(g.question)}</h4><div class="games-choices">${choices}</div>
+        <p class="games-ai-why"><b>Claude:</b> ${esc(g.ai!.why)}</p></section>`;
+    }).join('');
+    return `${back('Fixtures')}<div class="games-meta"><span class="games-tag">${ai.kind === 'event' ? 'Event' : 'Match'}</span><span class="games-when${live ? ' is-live' : ''}">${live ? '● ' : ''}${when(ai.start)}</span></div>
+      <h3 class="games-title" tabindex="-1">${esc(f.title)}</h3>
+      <p>${esc(f.venue)} · <a href="${esc(ai.source)}" target="_blank" rel="noopener noreferrer">Source ↗</a></p>
+      ${ai.lat !== undefined && getMap ? `<button type="button" class="games-primary games-go" data-act="go" data-id="${esc(key)}">Go to venue</button>` : ''}
+      <p class="games-ai-note">Make a prediction on each question. You can change your picks until they close. Found and predicted by Claude from public listings, so check the source.</p>
+      ${questions}`;
+  }
+  function goToVenue(key: string) {
+    const f = games.find(g => g.ai?.fixture === key);
+    const map = getMap?.();
+    if (!f?.ai || f.ai.lat === undefined || f.ai.lng === undefined || !map) return;
+    dialog.close();
+    venueMarker?.remove();
+    const el = document.createElement('div');
+    el.className = 'games-venue-pin';
+    el.innerHTML = `<i></i><span>${esc(f.title)}</span>`;
+    venueMarker = new maplibregl.Marker({ element: el, anchor: 'bottom' }).setLngLat([f.ai.lng, f.ai.lat]).addTo(map);
+    map.flyTo({ center: [f.ai.lng, f.ai.lat], zoom: 16, duration: 2200, essential: true });
+  }
+  /** Ask the server to look for real fixtures near this city (cached for a few hours). */
+  async function discover() {
+    const place = getPlace();
+    if (!place || !scope || discovered.has(scope)) return;
+    discovered.add(scope);
+    discovering = true;
+    render(true);
+    try {
+      const label = [place.locality, place.city, place.region, place.country].filter((v, i, a) => v && a.indexOf(v) === i).join(', ');
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const response = await fetch('/api/city/fixtures?city=' + encodeURIComponent(scope), { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ lat: place.lat, lng: place.lng, label }) });
+        if (response.status !== 202) break;
+        await new Promise(r => setTimeout(r, 15000)); // someone else is searching this city; wait for it
+      }
+    } catch { /* the board still works without Claude's fixtures */ }
+    discovering = false;
+    await refresh();
+    render(true);
+  }
   function render(force = false) {
     const game = games.find(g => g.id === current);
     if (!force && (screen === 'create' || screen === 'next')) return;
-    const key = JSON.stringify([screen, loaded, confirmVoid, screen === 'game' ? [game, game && phase(game)] : games.map(g => [g.id,g.title,g.venue,g.round,phase(g)])]);
+    const key = JSON.stringify([screen, current, loaded, confirmVoid, discovering, screen === 'game' ? [game, game && phase(game)] : games.map(g => [g.id,g.title,g.venue,g.round,phase(g),g.pick,g.counts])]);
     if (!force && key === lastRender) return;
     lastRender = key;
     const active = document.activeElement as HTMLElement | null;
     const focusKey = active && content.contains(active) ? [active.dataset.act,active.dataset.id,active.dataset.choice] : undefined;
-    content.innerHTML = screen === 'create' ? form() : game && screen === 'next' ? form(game) : game && screen === 'game' ? detail(game) : overview();
+    content.innerHTML = screen === 'create' ? form() : game && screen === 'next' ? form(game) : screen === 'fixture' ? fixtureScreen(current) : game && screen === 'game' ? detail(game) : overview();
     if (focusKey?.[0]) {
       const same = [...content.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')].find(b =>
         b.dataset.act === focusKey[0] && b.dataset.id === focusKey[1] && b.dataset.choice === focusKey[2]);
@@ -221,7 +312,7 @@ export function mountGames(getPlace: () => Place | undefined) {
       games = [data as Game,...games.filter(g => g.id !== data.id)];
       prefill = undefined;
       content.inert = false;
-      show('game', data.id);
+      if ((data as Game).ai) show('fixture', (data as Game).ai!.fixture); else show('game', data.id);
       if (action === 'create' || action === 'next') content.querySelector<HTMLElement>('.games-title')?.focus({preventScroll:true});
       else restoreFocus(focusKey);
       statusMessage(action === 'pick' ? 'Pick saved.' : action === 'result' ? 'Outcome confirmed.' : action === 'void' ? 'Fixture ended without a result.' : 'Fixture updated.');
@@ -253,13 +344,18 @@ export function mountGames(getPlace: () => Place | undefined) {
     switch (act) {
       case 'host': prefill = undefined; return show('create');
       case 'view': return show('game', id);
+      case 'fixture': return show('fixture', id);
+      case 'go': return goToVenue(id ?? '');
       case 'compose': return show('next', current);
       case 'back':
         prefill = undefined;
+        if (screen === 'fixture') return show('list');
         return screen === 'next' ? show('game', current) : show('list');
       case 'void-ask': confirmVoid = true; render(true); return content.querySelector<HTMLElement>('#void-heading')?.focus();
       case 'void-cancel': confirmVoid = false; render(true); return content.querySelector<HTMLElement>('[data-act=void-ask]')?.focus();
-      case 'pick': case 'result': return void submit(act, {choice:Number(choice)});
+      case 'pick': case 'result':
+        if (screen === 'fixture' && id) current = id; // a question on the fixture screen
+        return void submit(act, {choice:Number(choice)});
       case 'lock': case 'end': case 'void': return void submit(act);
     }
   });
@@ -314,6 +410,7 @@ export function mountGames(getPlace: () => Place | undefined) {
     dialog.showModal();
     show('list');
     void refresh();
+    void discover();
     let ticks = 0;
     interval = window.setInterval(() => {
       if (document.hidden || busy) return;

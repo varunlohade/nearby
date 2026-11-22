@@ -87,3 +87,16 @@
 @media (max-width: 365px) {
   .games-pair { grid-template-columns: 1fr; }
 }
+
+/* Claude's fixtures: real matches and events near you */
+.games-when { display: block; margin-top: 2px; font-size: 12px; opacity: .8; }
+.games-when.is-live { color: #e5484d; font-weight: 700; opacity: 1; }
+.games-ai-pick { color: var(--accent, #c27c0e); font-weight: 700; }
+.games-ai-why { margin: 6px 0 0; font-size: 12.5px; line-height: 1.45; opacity: .85; }
+.games-ai-note { font-size: 12px; opacity: .75; }
+.games-finding::after { content: ''; display: inline-block; width: 10px; height: 10px; margin-left: 8px; border: 2px solid currentColor; border-top-color: transparent; border-radius: 50%; animation: games-spin .8s linear infinite; vertical-align: -1px; }
+@keyframes games-spin { to { transform: rotate(360deg); } }
+.games-go { margin: 4px 0 10px; }
+.games-venue-pin { display: grid; justify-items: center; pointer-events: none; filter: drop-shadow(0 2px 3px #0007); }
+.games-venue-pin i { width: 22px; height: 22px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg); background: #e5484d; border: 3px solid #fff; }
+.games-venue-pin span { order: -1; margin-bottom: 6px; padding: 3px 8px; border-radius: 4px; background: #fff; color: #1d1d1f; font: 600 12px/1.2 Geist, sans-serif; white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }

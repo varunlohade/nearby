@@ -1,4 +1,5 @@
 import { cityApi } from './server/city';
+import { configureFixtures, fixturesApi } from './server/fixtures';
 import { askApi } from './server/ask';
 import { placesApi } from './server/places';
 import { lumaApi } from './server/luma';
@@ -19,6 +20,7 @@ export default defineConfig(({ mode }) => {
   const places = placesApi(env.TURN_URLS, env.TURN_SHARED_SECRET);
   configureIdentity(env.IDENTITY_SECRET || secret);
   configureGuard(env.ANTHROPIC_API_KEY ?? '');
+  configureFixtures(env.ANTHROPIC_API_KEY ?? '');
   const communities = communitiesApi();
   const agents = agentsApi();
   return {
@@ -26,8 +28,8 @@ export default defineConfig(({ mode }) => {
     plugins: [
       {
         name: 'nexconn-api',
-        configureServer(server) { for (const m of [cityApi, api, lumaApi, ask, places, communities, agents]) server.middlewares.use(m); },
-        configurePreviewServer(server) { for (const m of [cityApi, api, lumaApi, ask, places, communities, agents]) server.middlewares.use(m); },
+        configureServer(server) { for (const m of [fixturesApi, cityApi, api, lumaApi, ask, places, communities, agents]) server.middlewares.use(m); },
+        configurePreviewServer(server) { for (const m of [fixturesApi, cityApi, api, lumaApi, ask, places, communities, agents]) server.middlewares.use(m); },
       },
     ],
   };
