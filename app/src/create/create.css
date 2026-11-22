@@ -139,12 +139,12 @@
   .audio-on .nearby { visibility: hidden; }
   .create-card { width: calc(100vw - 28px); }
 }
-.private-room {margin:auto;padding:20px;width:min(390px,92vw);max-height:85dvh;overflow:auto;border-radius:12px;border:1px solid #585c59;background:#202424;color:#f2efe6;}
+.private-room {margin:auto;padding:20px;width:min(390px,92vw);max-height:85dvh;overflow:auto;border-radius:12px;border:1px solid #585c59;background:var(--panel-solid);color:var(--text);}
 .private-room::backdrop {background:#090c0ccc;}
 .private-room header,.private-room form {display:flex;gap:8px;align-items:center;justify-content:space-between;}
 .private-room header b {font-size:22px;overflow-wrap:anywhere;}
-.private-room small {display:block;color:#efcc97;margin:6px 0 14px;}
-.private-room button,.private-room input {border-radius:5px;padding:8px;background:#313737;border:1px solid #59615d;color:inherit;}
+.private-room small {display:block;color:var(--accent);margin:6px 0 14px;}
+.private-room button,.private-room input {border-radius:5px;padding:8px;background:var(--surface-raised);border:1px solid #59615d;color:inherit;}
 .private-room form[hidden] {display:none;}
 .private-room input {flex:1;min-width:0;}
 .private-room ul {max-height:35dvh;overflow:auto;list-style:none;padding:0;}

@@ -5,7 +5,7 @@
 .landing-features { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .landing-features li {
   display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 10px; align-items: start;
-  padding: 10px 12px; background: #151818d9; border: 1px solid #ffffff1f; border-left: 3px solid var(--accent); border-radius: 3px;
+  padding: 10px 12px; background: #141b2eea; border: 1px solid #ffffff1f; border-left: 3px solid var(--accent); border-radius: 3px;
   backdrop-filter: blur(6px); opacity: 0; animation: landing-in .5s ease forwards;
 }
 .landing-features li:nth-child(1) { animation-delay: .15s; } .landing-features li:nth-child(2) { animation-delay: .25s; }
@@ -14,8 +14,8 @@
 @keyframes landing-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 .landing-icon { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 2px; background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
 .landing-icon svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.landing-features b { display: block; color: #fff5df; font: 700 18px/1.1 var(--display, sans-serif); text-transform: uppercase; letter-spacing: .01em; }
-.landing-features small { display: block; margin-top: 3px; color: #c9c8be; font: 12.5px/1.4 Geist, sans-serif; }
+.landing-features b { display: block; color: var(--text); font: 700 18px/1.1 var(--display, sans-serif); text-transform: uppercase; letter-spacing: .01em; }
+.landing-features small { display: block; margin-top: 3px; color: var(--dim); font: 12.5px/1.4 Geist, sans-serif; }
 .landing-privacy { margin: 12px 0 0; color: #9fe9d6; font: 500 11.5px "Geist Mono", monospace; letter-spacing: .02em; }
 .landing-privacy span { margin-right: 4px; }
 

@@ -1,6 +1,6 @@
 /* Ask about my neighbourhood — matches the street-atlas HUD (amber accent, condensed display type). */
 .ask {
-  --ask-bg: #171919f5;
+  --ask-bg: var(--panel);
   position: absolute; z-index: 6; left: 50%; bottom: 40px; transform: translateX(-50%);
   width: min(540px, calc(100vw - 720px)); min-width: 380px;
   display: none; flex-direction: column; gap: 8px; pointer-events: none;
@@ -21,9 +21,9 @@
   background: var(--accent); color: var(--accent-ink, #231a0c); font: italic 800 20px/1 var(--display, sans-serif); transform: skewX(-8deg);
 }
 .ask-bar input { min-width: 0; height: 100%; border: 0; outline: 0; background: transparent; color: #f6f2e6; font: 500 15px Geist, sans-serif; }
-.ask-bar input::placeholder { color: #b9b8ad; }
+.ask-bar input::placeholder { color: var(--dim); }
 .ask-bar button {
-  height: 38px; padding: 0 16px; border: 0; border-radius: 2px; background: #efeadf; color: #191a18;
+  height: 38px; padding: 0 16px; border: 0; border-radius: 2px; background: var(--accent); color: var(--accent-ink);
   font: 700 17px/1 var(--display, sans-serif); text-transform: uppercase; letter-spacing: .02em;
 }
 .ask-bar button:hover { background: var(--accent); }
@@ -31,7 +31,7 @@
 
 .ask-chips { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; padding: 2px 1px; }
 .ask-chips button {
-  flex: none; padding: 6px 10px; border: 1px solid #ffffff38; border-radius: 2px; background: #161818e6; color: #eeeadf;
+  flex: none; padding: 6px 10px; border: 1px solid #ffffff38; border-radius: 2px; background: var(--panel-solid); color: #eeeadf;
   font: 500 12px Geist, sans-serif; white-space: nowrap; box-shadow: 0 4px 12px #0005;
 }
 .ask-chips button:hover { border-color: var(--accent); color: var(--accent); }
@@ -39,7 +39,7 @@
 
 .ask-card {
   order: -1; display: flex; flex-direction: column; max-height: calc(100dvh - 260px); overflow: auto; overscroll-behavior: contain;
-  background: #1c1e1ef7; border: 1px solid #ffffff2a; border-top: 3px solid var(--accent); border-radius: 3px;
+  background: var(--panel); border: 1px solid #ffffff2a; border-top: 3px solid var(--accent); border-radius: 3px;
   box-shadow: 0 18px 44px #0009; color: #f4f2e9; animation: ask-in .28s cubic-bezier(.2, .8, .2, 1);
 }
 .ask-card[hidden] { display: none; }

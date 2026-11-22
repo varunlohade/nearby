@@ -1,11 +1,15 @@
-:root { --accent:#ffd29b; --panel:#191b20f5; }
-.on-map .nearby {border:1px solid #ffffff24;border-radius:12px;background:#191b20;box-shadow:0 12px 42px #10101955;}
+:root {
+  --bg:#0b1020; --panel-solid:#151b32; --panel:#151b32f7; --surface-raised:#26304a;
+  --text:#f1f2fc; --dim:#bcc4dd; --faint:#a2accb; --line:#414d6a;
+  --accent:#c7b6ff; --accent-ink:#231a43; --primary:#4939bd; --live:#82efae; --live-ink:#0a3021;
+}
+.on-map .nearby {border:1px solid #ffffff24;border-radius:12px;background:var(--panel-solid);box-shadow:0 12px 42px #10101955;}
 #enter-roam {width:100%;display:flex;flex:none;position:relative;align-items:flex-start;justify-content:flex-end;flex-direction:column;gap:5px;padding:20px;height:145px;border:none;border-bottom:1px solid #ffffff22;text-align:left;color:#fff8e7;background:linear-gradient(80deg,#201c35b8,transparent 90%),url(/posters/free-roam.png) center / cover;cursor:pointer;}
 #enter-roam strong {font:italic 800 46px/.95 var(--display);letter-spacing:-.045em;text-transform:uppercase;text-shadow:2px 3px #322a3b;}
-.roam-tag {font:600 9px/1.5 'Geist Mono',monospace;letter-spacing:.13em;color:#ffe2bb;}
+.roam-tag {font:600 9px/1.5 'Geist Mono',monospace;letter-spacing:.13em;color:#ece4ff;}
 .roam-arrow {position:absolute;right:16px;bottom:18px;border:1px solid #ffefd466;background:#26233199;width:32px;height:32px;border-radius:50%;display:grid;place-items:center;font-size:18px;}
-#enter-roam:hover .roam-arrow {background:#ffddab;color:#25212a;}
-.nearby-head {border-top:0;background:#191b20;padding:18px;}
+#enter-roam:hover .roam-arrow {background:var(--accent);color:#25212a;}
+.nearby-head {border-top:0;background:var(--panel-solid);padding:18px;}
 .index-heading h2 {font-size:23px;text-transform:none;letter-spacing:-.015em;}
 .index-count,#host-start,.place-chip,.round-button,.chat-launcher,.map-tools button {border-radius:6px;}
 .chat-launcher {border-left-width:1px;}
@@ -38,3 +42,13 @@
 .roaming #street-atlas .maplibregl-canvas {image-rendering:pixelated;}
 body:not(.roaming) .roam-credit {display:none;}
 body.roaming #app .ask {display:none;}
+.on-map .vignette {background:linear-gradient(180deg,#2a234544,transparent 17%,transparent 85%,#2a234525);}
+.on-map .brand-word {color:#23213b;text-shadow:0 1px 6px #ffffffb3;}
+.on-map .brand-mark {background:var(--primary);}
+.on-map .district-meta,.on-map #hud-coords {color:#39344e;text-shadow:0 1px 5px #fffc;}
+.on-map .district h1 {color:#242044;text-shadow:0 1px 6px #fffc;}
+.message-avatar {background:#dccef7;color:#292039;}
+.message.mine p,.arrival .landing-go {background:var(--primary);color:#fff;}
+.player-position {background:#4939bd1f;border-color:#4939bd88;}
+.player-position i {background:var(--primary);}
+.player-position span {background:var(--primary);color:white;}

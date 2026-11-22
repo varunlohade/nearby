@@ -1,5 +1,5 @@
 /* Communities, neighbours nearby and agent connections — street-atlas HUD style. */
-.cm-section { border-top: 1px solid #ffffff1c; background: #171919; padding: 10px 12px 8px; flex: none; }
+.cm-section { border-top: 1px solid #ffffff1c; background: var(--panel-solid); padding: 10px 12px 8px; flex: none; }
 .cm-neighbours { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 9px; }
 .cm-near-count { display: flex; align-items: center; gap: 8px; padding: 0; border: 0; background: none; color: #d8d6cb; font: 500 12px Geist, sans-serif; cursor: pointer; }
 .cm-near-count i { width: 8px; height: 8px; border-radius: 50%; background: #6b6d66; }
@@ -36,10 +36,10 @@
 
 /* community panel */
 .cm-panel { position: absolute; z-index: 8; right: var(--edge); top: 100px; bottom: 40px; width: min(400px, 36vw); overflow-y: auto; overscroll-behavior: contain;
-  background: #1c1e1ef7; border: 1px solid #ffffff2a; border-top: 3px solid var(--cm, var(--accent)); border-radius: 3px; box-shadow: 0 18px 44px #0009; color: #f4f2e9; }
+  background: var(--panel); border: 1px solid #ffffff2a; border-top: 3px solid var(--cm, var(--accent)); border-radius: 3px; box-shadow: 0 18px 44px #0009; color: #f4f2e9; }
 .cm-panel[hidden] { display: none; }
 .cm-open .chat-launcher { visibility: hidden; }
-.cm-panel-head { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; padding: 10px 10px 8px 16px; background: #1c1e1e; }
+.cm-panel-head { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; padding: 10px 10px 8px 16px; background: var(--panel-solid); }
 .cm-kicker { color: var(--cm, var(--accent)); font: 600 10px/1.4 "Geist Mono", monospace; letter-spacing: .1em; text-transform: uppercase; }
 .cm-x { width: 30px; height: 30px; border: 0; background: transparent; color: #cfcdc3; font-size: 22px; cursor: pointer; }
 .cm-x:hover { color: #fff; }

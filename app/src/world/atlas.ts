@@ -7,9 +7,9 @@ import type { Activity, Place } from './earth';
 
 const style = structuredClone(streetStyle) as unknown as StyleSpecification;
 const ink: Record<string, string> = {
-  land: '#252729', park: '#394d42', green: '#35463e', water: '#203f4c', waterway: '#32505c',
-  aeroway: '#414347', 'road-minor': '#5c6060', 'road-mid': '#959793',
-  'road-major': '#d4d1c4', 'road-motorway': '#e8dcc1', rail: '#878782',
+  land: '#e8e3f0', park: '#a8ccbb', green: '#bed8c8', water: '#a4c0df', waterway: '#8dabd1',
+  aeroway: '#cbc4d8', 'road-minor': '#fcf9ff', 'road-mid': '#fffdf7',
+  'road-major': '#fffaf0', 'road-motorway': '#ffeccc', rail: '#9b8fac',
 };
 const buildings = style.layers.find(layer => layer.type === 'fill-extrusion')!;
 buildings.layout = { visibility: 'none' };
@@ -24,14 +24,25 @@ Object.assign(buildings.paint!, {
 });
 for (const layer of style.layers) {
   if (layer.type === 'symbol') {
-    layer.paint = { ...layer.paint, 'text-color': '#cfcec4', 'text-halo-color': '#26282a', 'text-halo-width': 1.5 };
+    layer.paint = { ...layer.paint, 'text-color': '#3c3651', 'text-halo-color': '#f6f2fa', 'text-halo-width': 1.5 };
     if (layer.id === 'label-place') layer.layout = { ...layer.layout, 'text-transform': 'uppercase', 'text-letter-spacing': 0.14 };
   } else if (ink[layer.id]) {
     Object.assign(layer.paint!, { [layer.type + '-color']: ink[layer.id] });
   }
 }
+// A narrow outline keeps broad, pale roads readable through parks and city blocks.
+for (const id of ['road-mid','road-major','road-motorway']) {
+  const index = style.layers.findIndex(layer => layer.id === id);
+  const line = style.layers[index];
+  if (line?.type !== 'line') continue;
+  const casing = structuredClone(line);
+  casing.id += '-outline';
+  casing.paint = {...casing.paint, 'line-color':'#b2a5bd',
+    'line-width':['interpolate',['linear'],['zoom'],10,1,14,id==='road-mid' ? 3 : 4.5,18,id==='road-mid' ? 16 : 24]};
+  style.layers.splice(index,0,casing);
+}
 style.layers.splice(1, 0, { id: 'blocks', type: 'fill', source: 'omt', 'source-layer': 'building',
-  paint: { 'fill-color': '#383b3a', 'fill-opacity': 0.85 } });
+  paint: { 'fill-color': '#cfc6dd', 'fill-opacity': 0.85 } });
 
 export class StreetAtlas {
   private map: maplibregl.Map;

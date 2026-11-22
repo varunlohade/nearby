@@ -1,12 +1,12 @@
 // Three.js meshes for Free Roam, in nearby's street-atlas look: charcoal ground,
-// cream roads, teal water, dark buildings with warm lit windows, amber accents.
+// cream roads, teal water, dark buildings with warm lit windows, iris accents.
 // Everything static is merged into a handful of draw calls.
 
 import * as THREE from 'three';
 import type { Area, Building, Road, XZ } from './data';
 
 export const COLORS = {
-  sky: 0x14171b, ground: 0x24272a, park: 0x2f4437, water: 0x1f3d4a, accent: 0xf5bd52,
+  sky: 0x14171b, ground: 0x24272a, park: 0x2f4437, water: 0x1f3d4a, accent: 0xb7a1f5,
   road: { motorway: 0x485052, trunk: 0x4f5556, primary: 0x505659, secondary: 0x53585b, tertiary: 0x545959, minor: 0x585d5e, service: 0x4e5252, track: 0x454a47, path: 0x3f4542, raceway: 0xd4d1c4, busway: 0x6b6f6c } as Record<string, number>,
 };
 const ROAD_Y: Record<string, number> = { motorway: 0.09, trunk: 0.085, primary: 0.08, secondary: 0.075, tertiary: 0.07, minor: 0.06, service: 0.05, raceway: 0.08, busway: 0.055, track: 0.04, path: 0.035 };
